@@ -333,12 +333,15 @@ test('reconnect reports the connection state instead of throwing', async () => {
   })
   await settle()
 
-  // Discord is not running here, so the reconnect fails — the command still
-  // has to come back with a report rather than reject.
+  // Whether or not a Discord client is running on this machine, the command
+  // has to come back with a report rather than reject — and a failed connect
+  // must say why.
   const status = await fake.invoke('presence.reconnect')
-  assert.equal(status.connected, false)
+  assert.equal(typeof status.connected, 'boolean')
   assert.equal(status.summary.working, 1)
-  assert.ok(status.lastError, 'expected the failed connect to be reported')
+  if (!status.connected) {
+    assert.ok(status.lastError, 'expected the failed connect to be reported')
+  }
   await deactivate()
 })
 

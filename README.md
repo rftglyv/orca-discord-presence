@@ -1,5 +1,7 @@
 # Orca Discord Presence
 
+> Fork of [LuticaCANARD/orca-discord-presence](https://github.com/LuticaCANARD/orca-discord-presence) (MIT).
+
 Publishes what your [Orca](https://github.com/stablyai/orca) agent fleet is doing to your Discord status, next to the Orca logo.
 
 ```text
@@ -30,7 +32,7 @@ Nothing else. The plugin ships with a Discord application id and starts publishi
 Settings → Plugins → *Add marketplace*, paste the URL, and accept the consent dialog:
 
 ```text
-https://github.com/LuticaCANARD/orca-discord-presence.git#v0.2.0
+https://github.com/rftglyv/orca-discord-presence.git#v0.2.0
 ```
 
 The `#v0.2.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
@@ -113,9 +115,9 @@ Orca has no UI for per-plugin settings yet, so anything the commands do not cove
 
 | Platform | Path |
 | --- | --- |
-| Linux | `~/.config/Orca/plugins-data/lutica-canard.discord-presence/settings.json` |
-| macOS | `~/Library/Application Support/Orca/plugins-data/lutica-canard.discord-presence/settings.json` |
-| Windows | `%APPDATA%\Orca\plugins-data\lutica-canard.discord-presence\settings.json` |
+| Linux | `~/.config/Orca/plugins-data/rftglyv.discord-presence/settings.json` |
+| macOS | `~/Library/Application Support/Orca/plugins-data/rftglyv.discord-presence/settings.json` |
+| Windows | `%APPDATA%\Orca\plugins-data\rftglyv.discord-presence\settings.json` |
 
 ```json
 {
@@ -204,7 +206,7 @@ Contribution kinds the manifest could carry and deliberately does not:
 ## Development
 
 ```bash
-git clone https://github.com/LuticaCANARD/orca-discord-presence.git
+git clone https://github.com/rftglyv/orca-discord-presence.git
 cd orca-discord-presence
 npm install
 npm run build      # tsc → dist/
