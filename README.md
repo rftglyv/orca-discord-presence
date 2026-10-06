@@ -5,16 +5,23 @@
 Publishes what your [Orca](https://github.com/stablyai/orca) agent fleet is doing to your Discord status, next to the Orca logo.
 
 ```text
+Playing Orca ADE
 ┌──────┐  Orca                                              ← minimal (default)
 │ logo │  2 agents working · 1 blocked · across 2 worktrees   (3 of 5)
-└──────┘  00:14 elapsed
+└────🟡┘  00:14 elapsed
+          [ Get Orca ]
 
 ┌──────┐  Orca · checkout-service · feat/ipc                ← full
-│ logo │  2 agents working · 1 blocked · in checkout-service, web   (3 of 5)
-└──────┘  00:14 elapsed
+│ logo │  2 agents working · in checkout-service, web   (2 of 5)
+└────🟢┘  00:14 elapsed
+          [ Get Orca ]
 ```
 
-Line one is the **header**, and it is yours to set. Line two is the fleet, ending in Discord's own party gauge: busy agents out of the agents Orca has announced. The timer measures the current stretch of work, not how long Orca has been open.
+Line one is the **header**, and it is yours to set. Line two is the fleet, ending in Discord's own party gauge: busy agents out of the agents Orca has announced. The timer measures the current stretch of work — from the moment the agent itself started, as stamped by Orca — not how long Orca has been open.
+
+The badge in the logo's corner follows the fleet: 🟢 working, 🟡 an agent is waiting on you, ⚪ idle. Waiting outranks working, so a stuck prompt is what a glance at your profile shows. In the member list, your name carries the fleet line ("2 agents working") rather than the application name.
+
+An idle card does not linger: after 15 quiet minutes the status clears, and it comes back the moment an agent gets busy.
 
 An agent counts as busy while it is `working`, `blocked`, or `waiting` — Orca renders the last two identically, as "agent needs user attention", so a fleet sitting on permission prompts keeps the timer running instead of reading as idle.
 
@@ -22,7 +29,7 @@ TypeScript, no runtime dependencies — the Discord Rich Presence IPC protocol i
 
 ## Requirements
 
-- Orca `>= 1.4.0` with the plugin system enabled (Settings → Plugins) — last verified against Orca `1.4.192`, see [Compatibility](#compatibility)
+- Orca `>= 1.4.0` with the plugin system enabled (Settings → Plugins) — last verified against Orca `1.4.221`, see [Compatibility](#compatibility)
 - The Discord **desktop** app running on the same machine (the web client exposes no local IPC socket)
 
 Nothing else. The plugin ships with a Discord application id and starts publishing as soon as an agent does something.
@@ -32,10 +39,10 @@ Nothing else. The plugin ships with a Discord application id and starts publishi
 Settings → Plugins → *Add marketplace*, paste the URL, and accept the consent dialog:
 
 ```text
-https://github.com/rftglyv/orca-discord-presence.git#v0.2.0
+https://github.com/rftglyv/orca-discord-presence.git#v0.3.0
 ```
 
-The `#v0.2.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
+The `#v0.3.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
 
 ## Privacy
 
@@ -92,7 +99,13 @@ The **Set Header** command is the way in that does not involve a text editor:
 
 Point `clientId` at your own application and that stops being true: the key `orca` means nothing there until you upload artwork under that name. Upload a logo as `orca`, or set `largeImage` to whichever key you used.
 
-`smallImage` is the badge in the logo's corner, and it is **off by default** — the shipped application hosts artwork under no key but `orca`, so a default would publish an empty square. Upload a badge to your own application and name its key to turn it on; a badge with no logo to sit on is dropped rather than published alone.
+`smallImage` is the badge in the logo's corner. **Unset, it follows the fleet** and publishes one of the keys `working`, `waiting`, or `idle`, which the shipped application hosts (the artwork lives in `assets/discord/`). Set it to a key of your own to pin that artwork, or to `""` to turn the badge off. A badge with no logo to sit on is dropped rather than published alone.
+
+### The button and the member list
+
+`buttons` defaults to one **Get Orca** button linking to onorca.dev. Discord shows buttons to everyone viewing your profile *except you*, so do not expect to see it on your own card. Up to two buttons are published; one with a label over 32 characters or a non-`http(s)` URL is dropped rather than sent, since Discord would reject the whole update over it.
+
+`statusLine` picks which line Discord shows next to your name in member and DM lists: `"state"` (default — the fleet line), `"details"` (the header line), or `"name"` (the application name).
 
 ### The party gauge
 
@@ -105,7 +118,7 @@ The line *above* the header reads *"Playing \<application name\>"*, and that nam
 1. [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**
 2. Name it whatever the status should read as
 3. Copy the **Application ID** from *General Information* into `clientId`
-4. Upload artwork under *Rich Presence → Art Assets*, then set `largeImage` to its key
+4. Upload artwork under *Rich Presence → Art Assets* — the four PNGs in `assets/discord/` keep their file names as keys, which is what the defaults expect (`scripts/generate-discord-art.py` regenerates them from Orca's icon)
 
 A Rich Presence application id is a public identifier — it travels in every client's IPC traffic and grants nothing on its own. The sensitive half is the OAuth client secret, which Rich Presence never needs and this plugin never asks for. That is why an id ships in the source.
 
@@ -116,7 +129,7 @@ Orca has no UI for per-plugin settings yet, so anything the commands do not cove
 | Platform | Path |
 | --- | --- |
 | Linux | `~/.config/Orca/plugins-data/rftglyv.discord-presence/settings.json` |
-| macOS | `~/Library/Application Support/Orca/plugins-data/rftglyv.discord-presence/settings.json` |
+| macOS | `~/Library/Application Support/orca/plugins-data/rftglyv.discord-presence/settings.json` |
 | Windows | `%APPDATA%\Orca\plugins-data\rftglyv.discord-presence\settings.json` |
 
 ```json
@@ -127,8 +140,10 @@ Orca has no UI for per-plugin settings yet, so anything the commands do not cove
   "header": "Orca",
   "largeImage": "orca",
   "largeText": "Orca",
-  "smallImage": "",
-  "smallText": ""
+  "smallText": "",
+  "buttons": [{ "label": "Get Orca", "url": "https://onorca.dev" }],
+  "statusLine": "state",
+  "idleClearMinutes": 15
 }
 ```
 
@@ -140,8 +155,11 @@ Orca has no UI for per-plugin settings yet, so anything the commands do not cove
 | `header` | `"Orca"` | Line one; takes `{workspace}` and `{branch}`; `""` hides it |
 | `largeImage` | `"orca"` | Art asset key for the logo; `""` publishes no image |
 | `largeText` | `"Orca"` | Tooltip when hovering the logo |
-| `smallImage` | `""` *(off)* | Art asset key for the badge in the logo's corner |
-| `smallText` | `""` | Tooltip when hovering the badge |
+| `smallImage` | *(follows the fleet)* | Art asset key for the badge; `""` turns it off |
+| `smallText` | *(follows the fleet)* | Tooltip when hovering the badge |
+| `buttons` | Get Orca | Up to two `{ "label", "url" }` link buttons; `[]` or `false` publishes none |
+| `statusLine` | `"state"` | Member-list line: `"state"`, `"details"`, or `"name"` |
+| `idleClearMinutes` | `15` | Minutes an idle card stays up before the status clears; `0` keeps it |
 
 Every key is optional, and `""` means *off* rather than *default*. Restart Orca, or disable and re-enable the plugin, to pick the file up.
 
@@ -159,22 +177,25 @@ Every key is optional, and `""` means *off* rather than *default*. Restart Orca,
 
 ## Compatibility
 
-Checked on 2026-08-30 against every stable desktop release after the previous `v1.4.185` checkpoint: [`v1.4.186`](https://github.com/stablyai/orca/releases/tag/v1.4.186), [`v1.4.187`](https://github.com/stablyai/orca/releases/tag/v1.4.187), [`v1.4.188`](https://github.com/stablyai/orca/releases/tag/v1.4.188), [`v1.4.190`](https://github.com/stablyai/orca/releases/tag/v1.4.190), [`v1.4.191`](https://github.com/stablyai/orca/releases/tag/v1.4.191), and the latest [`v1.4.192`](https://github.com/stablyai/orca/releases/tag/v1.4.192). There was no stable `v1.4.189` release.
+Reviewed on 2026-10-07 against Orca [`v1.4.221`](https://github.com/stablyai/orca/releases/tag/v1.4.221), the latest stable release, and `main` at `2137295bb692f5e559daecee9e7bfb04472e5707`. (The upstream plugin last reviewed `v1.4.192`.)
 
-Those releases substantially improved agent-status correctness, worktree identity across hosts, remote/SSH recovery, terminal sessions, native chat, automations, and WSL behavior. The presence benefits from the corrected events automatically. Orca also added an internal `workingMode: "monitoring"`, but the plugin event remains a deliberately bounded four-field projection, so this plugin cannot distinguish foreground work from background monitoring yet.
+Two tracked contracts moved since then, both compatibly:
 
-The ten upstream files this plugin depends on are byte-identical at `v1.4.185`, `v1.4.192`, and Orca `main` commit `d607a63670d504763262daa9df335baac4eea8be` observed on 2026-08-30. `main` still carries its independent `1.4.178-rc.2` package version, so source identity—not that package number—is the useful comparison. The engine floor stays `>=1.4.0`: no public plugin contract used here has moved since the plugin system landed.
+- **`plugin-events.ts`** — `agent.status.changed` gained an optional `mainAgent: { state, outcome?, stateStartedAt }`. The plugin now uses `stateStartedAt` for the elapsed timer and falls back to its own clock on hosts that omit it.
+- **`plugin-manifest.ts`** — tab-key helpers moved to `plugin-tab-key.ts` and are re-exported; the manifest schema itself is unchanged.
 
-Re-read upstream and found unchanged — these are the contracts `src/lib/orca-api.mts` transcribes:
+The engine floor stays `>=1.4.0`: every field used beyond the original contract is optional.
+
+Re-read upstream — these are the contracts `src/lib/orca-api.mts` transcribes:
 
 | Upstream contract | State |
 | --- | --- |
 | Host API v0 method table (`plugin-host-api.ts`) | 13 methods, all still `experimental`; `workspace.readContext` still returns `{ branch, displayName, terminals }` |
-| Event set (`plugin-events.ts`) | Still the three worktree/agent events — no focus-change event |
+| Event set (`plugin-events.ts`) | Still the three worktree/agent events — no focus-change event; `agent.status.changed` now carries optional `mainAgent` |
 | Capability kinds (`plugin-capabilities.ts`) | Still seven unscoped kinds; still no `net:*` |
-| Agent states (`agent-status-types.ts`) | Still `working` / `blocked` / `waiting` / `done`; new internal monitoring and per-turn fields do not reach the plugin event payload |
+| Agent states (`agent-status-types.ts`) | Still `working` / `blocked` / `waiting` / `done`; the internal `monitoring` working mode still does not reach the plugin event payload |
 | Worker environment (`plugin-worker-env.ts`) | Still an allowlist without `XDG_RUNTIME_DIR` |
-| Idle reap (`plugin-host-protocol.ts`) | Still 5 minutes |
+| Idle reap (`plugin-host-protocol.ts`) | Still 5 minutes; worker→host calls count as activity (`plugin-host-process.ts`) |
 | Settings and storage location | Still `<userData>/plugins-data/<publisher>.<id>/` |
 | Manifest and marketplace schemas | Unchanged; `commands[].context` is declared here |
 
@@ -189,15 +210,17 @@ Contribution kinds the manifest could carry and deliberately does not:
 
 ## Known limitations
 
-**The status is ephemeral by design.** Orca reaps a plugin worker after 5 minutes with no in-flight work (`PLUGIN_WORKER_IDLE_REAP_MS`) and re-forks it on the next event. A worker cannot keep itself alive — only host→worker traffic refreshes the idle clock. So the presence appears while your fleet is active, disappears after a few quiet minutes, and returns on the next agent event. Fleet state is persisted to plugin storage so nothing is lost across the gap, and statuses older than six hours are dropped rather than rehydrated as if still live.
+**The status appears on the first event.** Orca forks a plugin worker lazily, so after Orca starts the card shows up with the first agent status change, not at launch. Once running, the worker's own 30-second workspace poll counts as activity, so Orca's 5-minute idle reap (`PLUGIN_WORKER_IDLE_REAP_MS`) does not take it down while Orca is open — which is why the plugin clears an idle card itself after `idleClearMinutes`. Fleet state is persisted to plugin storage across a restart, and statuses older than six hours are dropped rather than rehydrated as if still live.
 
 **The focused workspace is polled, not pushed.** Orca emits no focus-change event, so `full` privacy refreshes and republishes the workspace and branch every 30 seconds. **Show Connection Status** and **Reconnect** refresh it immediately.
 
-**Command arguments depend on the host.** **Set Header** accepts a string or `{ header }`, and **Cycle Privacy Level** a level or `{ privacy }`, when Orca passes an argument through. As of `1.4.192` no host path does: the palette and recorded shortcuts both invoke commands with no argument, even though the IPC carries one. Until that changes the cycles are the whole interface, and free-form headers go in the settings file.
+**Command arguments depend on the host.** **Set Header** accepts a string or `{ header }`, and **Cycle Privacy Level** a level or `{ privacy }`, when Orca passes an argument through. As of `1.4.221` no host path does: the palette and recorded shortcuts both invoke commands with no argument, even though the IPC carries one. Until that changes the cycles are the whole interface, and free-form headers go in the settings file.
 
 **Linux socket discovery is heuristic.** Orca's worker environment is an allowlist that omits `XDG_RUNTIME_DIR`, so `/run/user/<uid>` is reconstructed from `process.getuid()`. Flatpak and Snap layouts are probed too.
 
 **The plugin API is EXPERIMENTAL upstream.** Orca's own docs promise no compatibility until `pluginApi` v1 freezes. Opening a local socket is possible today only because the capability model has no `net:*` kind yet — the source notes scoped kinds are planned. A future Orca may gate this, and the plugin would need a declared capability to keep working.
+
+**Discord throttles rapid reconnects.** A client that connects many times in a few minutes sees handshakes slow down or time out; in normal use the plugin connects once and stays connected, but space out manual testing.
 
 **Discord rate limits `SET_ACTIVITY`.** Updates are debounced (1.5s) with a 4s floor between publishes, and identical payloads are skipped entirely.
 
@@ -210,8 +233,9 @@ git clone https://github.com/rftglyv/orca-discord-presence.git
 cd orca-discord-presence
 npm install
 npm run build      # tsc → dist/
-npm test           # build + node --test (80 tests)
+npm test           # build + node --test
 npm run typecheck  # no emit
+npm run preview -- waiting 60   # show a sample card (working | waiting | idle) for 60s
 ```
 
 Settings → Plugins → *Add development plugin* and pick the checkout directory to load it into Orca.

@@ -34,9 +34,9 @@ test('an unchanged release and main pass the compatibility assessment', () => {
 
 test('a new stable release requires review even when the contracts match', () => {
   const snapshot = matchingSnapshot()
-  snapshot.latestRelease = 'v1.4.193'
+  snapshot.latestRelease = 'v99.0.0'
   assert.deepEqual(assessCompatibility(baseline, snapshot), [
-    'latest stable release is v1.4.193; reviewed baseline is v1.4.192'
+    `latest stable release is v99.0.0; reviewed baseline is ${baseline.verifiedRelease}`
   ])
 })
 

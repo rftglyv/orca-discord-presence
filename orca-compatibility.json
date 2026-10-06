@@ -1,13 +1,13 @@
 {
   "upstream": "stablyai/orca",
-  "verifiedRelease": "v1.4.192",
-  "verifiedAt": "2026-08-30",
+  "verifiedRelease": "v1.4.221",
+  "verifiedAt": "2026-10-07",
   "contracts": {
     "src/shared/plugins/plugin-host-api.ts": "b4f6fc41d799c2b2a4cd6ec1981070b1c6f750c6",
-    "src/shared/plugins/plugin-events.ts": "118d0e376cc4e4c36b8d8e1a7cdf7abdf4e1b8fa",
+    "src/shared/plugins/plugin-events.ts": "e8852a5646dc60a63902c34129c823a30c99dbb4",
     "src/shared/plugins/plugin-capabilities.ts": "7f6f04c06b69efc0132332f86a4ca7ef734c0637",
     "src/shared/plugins/plugin-host-protocol.ts": "e6ea15d042ebe3ece4eeb0323f33b76e29a4574e",
-    "src/shared/plugins/plugin-manifest.ts": "2a82275cda63c253bf3adcef1933ae170c5fe662",
+    "src/shared/plugins/plugin-manifest.ts": "aa7bae64fc44cf4aaf75ea1d8c5c595024b2d1dd",
     "src/shared/plugins/plugin-marketplace.ts": "98d7eb8059b8c39119389cff818440d7f7ea0cd7",
     "src/main/plugins/plugin-worker-env.ts": "3dbe09b49a26f4939cc9019a985a47cc236e0b43",
     "src/main/plugins/plugin-event-bus.ts": "cee9e7825a5e027df95962ffe4260af3156ff7f3",
