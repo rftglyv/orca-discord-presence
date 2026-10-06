@@ -334,6 +334,60 @@ function dedupeSegments(segments) {
     }
     return kept;
 }
+export function fleetMood(summary) {
+    if (summary.blocked > 0 || summary.waiting > 0) {
+        return 'waiting';
+    }
+    return summary.working > 0 ? 'working' : 'idle';
+}
+const MOOD_TEXT = {
+    working: 'Agents working',
+    waiting: 'Waiting on input',
+    idle: 'Idle'
+};
+/** Shown to everyone viewing the profile — Discord hides buttons from the user themselves. */
+export const DEFAULT_BUTTONS = [
+    { label: 'Get Orca', url: 'https://onorca.dev' }
+];
+/** Discord's limits: two buttons, 1–32 character labels, 1–512 character URLs. */
+const MAX_BUTTONS = 2;
+const BUTTON_LABEL_MAX = 32;
+const BUTTON_URL_MAX = 512;
+/**
+ * Keeps only buttons Discord will accept. One bad button makes Discord reject
+ * the whole SET_ACTIVITY, so dropping it here beats losing the card.
+ */
+export function sanitizeButtons(raw) {
+    if (!Array.isArray(raw)) {
+        return undefined;
+    }
+    const buttons = [];
+    for (const entry of raw) {
+        const record = asRecord(entry);
+        const label = asString(record?.['label']).trim();
+        const url = asString(record?.['url']).trim();
+        if (label.length > 0 &&
+            label.length <= BUTTON_LABEL_MAX &&
+            url.length <= BUTTON_URL_MAX &&
+            /^https?:\/\/\S+$/.test(url)) {
+            buttons.push({ label, url });
+        }
+        if (buttons.length === MAX_BUTTONS) {
+            break;
+        }
+    }
+    return buttons;
+}
+/** Which line the member list shows beside the user's name. */
+export const STATUS_LINES = ['name', 'state', 'details'];
+/**
+ * `state`, because the fleet summary is the line that changes: "2 agents
+ * working" says more in a member list than the application name does.
+ */
+export const DEFAULT_STATUS_LINE = 'state';
+export function isStatusLine(value) {
+    return typeof value === 'string' && STATUS_LINES.includes(value);
+}
 /**
  * Builds the payload handed to SET_ACTIVITY. Returns `null` when nothing should
  * be published — the caller clears the status rather than sending an empty one.
@@ -347,12 +401,15 @@ function dedupeSegments(segments) {
  * went from idle to busy, not process start, so the timer reads as "how long
  * this batch of work has been running".
  */
-export function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId }) {
+export function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine }) {
     if (privacy === 'off') {
         return null;
     }
     const summary = summarize(state);
-    const activity = {};
+    const activity = {
+        type: 0,
+        status_display_type: STATUS_LINES.indexOf(statusLine ?? DEFAULT_STATUS_LINE)
+    };
     const heading = renderHeader(header ?? DEFAULT_HEADER, { focus, state, privacy });
     if (privacy === 'full') {
         const project = describeProject(focus, state);
@@ -380,10 +437,11 @@ export function buildActivity({ state, focus, privacy, startedAt, header, assets
     }
     // A small image needs a large one to sit on: Discord renders it as a badge in
     // the logo's corner, and on its own it is simply dropped.
-    const smallImage = assets?.smallImage ?? '';
+    const mood = fleetMood(summary);
+    const smallImage = assets?.smallImage ?? mood;
     if (largeImage && smallImage) {
         activity.assets = { ...activity.assets, small_image: smallImage };
-        const smallText = assets?.smallText ?? '';
+        const smallText = assets?.smallText ?? (assets?.smallImage === undefined ? MOOD_TEXT[mood] : '');
         if (smallText) {
             activity.assets.small_text = clampField(smallText);
         }
@@ -391,6 +449,10 @@ export function buildActivity({ state, focus, privacy, startedAt, header, assets
     const party = describeParty(summary, partyId);
     if (party) {
         activity.party = party;
+    }
+    const published = sanitizeButtons(buttons ?? DEFAULT_BUTTONS) ?? [];
+    if (published.length > 0) {
+        activity.buttons = published;
     }
     activity.instance = false;
     return activity;

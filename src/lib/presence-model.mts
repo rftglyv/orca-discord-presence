@@ -410,10 +410,86 @@ function dedupeSegments(segments: readonly string[]): string[] {
 export type PresenceAssets = {
   largeImage?: string | undefined
   largeText?: string | undefined
-  /** Badge in the corner of the logo. Off by default: the shipped application
-   *  hosts no artwork under any other key, so a default would render blank. */
+  /** Badge in the corner of the logo. Unset follows the fleet's mood (see
+   *  `fleetMood`); `""` turns it off; any other key pins that artwork. */
   smallImage?: string | undefined
   smallText?: string | undefined
+}
+
+/**
+ * What the corner badge says at a glance. Attention outranks work: an agent
+ * stuck on a permission prompt is the one thing a viewer — or the user glancing
+ * at their own profile — should notice, even while others keep working.
+ *
+ * Each mood doubles as an art asset key on the shipped application.
+ */
+export type FleetMood = 'working' | 'waiting' | 'idle'
+
+export function fleetMood(summary: PresenceSummary): FleetMood {
+  if (summary.blocked > 0 || summary.waiting > 0) {
+    return 'waiting'
+  }
+  return summary.working > 0 ? 'working' : 'idle'
+}
+
+const MOOD_TEXT: Record<FleetMood, string> = {
+  working: 'Agents working',
+  waiting: 'Waiting on input',
+  idle: 'Idle'
+}
+
+export type PresenceButton = { label: string; url: string }
+
+/** Shown to everyone viewing the profile — Discord hides buttons from the user themselves. */
+export const DEFAULT_BUTTONS: readonly PresenceButton[] = [
+  { label: 'Get Orca', url: 'https://onorca.dev' }
+]
+
+/** Discord's limits: two buttons, 1–32 character labels, 1–512 character URLs. */
+const MAX_BUTTONS = 2
+const BUTTON_LABEL_MAX = 32
+const BUTTON_URL_MAX = 512
+
+/**
+ * Keeps only buttons Discord will accept. One bad button makes Discord reject
+ * the whole SET_ACTIVITY, so dropping it here beats losing the card.
+ */
+export function sanitizeButtons(raw: unknown): PresenceButton[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const buttons: PresenceButton[] = []
+  for (const entry of raw) {
+    const record = asRecord(entry)
+    const label = asString(record?.['label']).trim()
+    const url = asString(record?.['url']).trim()
+    if (
+      label.length > 0 &&
+      label.length <= BUTTON_LABEL_MAX &&
+      url.length <= BUTTON_URL_MAX &&
+      /^https?:\/\/\S+$/.test(url)
+    ) {
+      buttons.push({ label, url })
+    }
+    if (buttons.length === MAX_BUTTONS) {
+      break
+    }
+  }
+  return buttons
+}
+
+/** Which line the member list shows beside the user's name. */
+export const STATUS_LINES = ['name', 'state', 'details'] as const
+export type StatusLine = (typeof STATUS_LINES)[number]
+
+/**
+ * `state`, because the fleet summary is the line that changes: "2 agents
+ * working" says more in a member list than the application name does.
+ */
+export const DEFAULT_STATUS_LINE: StatusLine = 'state'
+
+export function isStatusLine(value: unknown): value is StatusLine {
+  return typeof value === 'string' && (STATUS_LINES as readonly string[]).includes(value)
 }
 
 export type BuildActivityInput = {
@@ -426,6 +502,10 @@ export type BuildActivityInput = {
   assets?: PresenceAssets | undefined
   /** Opaque party id; omitted, Discord may not render the party size at all. */
   partyId?: string | undefined
+  /** `undefined` takes `DEFAULT_BUTTONS`; `[]` publishes none. */
+  buttons?: readonly PresenceButton[] | undefined
+  /** `undefined` takes `DEFAULT_STATUS_LINE`. */
+  statusLine?: StatusLine | undefined
 }
 
 /**
@@ -448,13 +528,18 @@ export function buildActivity({
   startedAt,
   header,
   assets,
-  partyId
+  partyId,
+  buttons,
+  statusLine
 }: BuildActivityInput): DiscordActivity | null {
   if (privacy === 'off') {
     return null
   }
   const summary = summarize(state)
-  const activity: DiscordActivity = {}
+  const activity: DiscordActivity = {
+    type: 0,
+    status_display_type: STATUS_LINES.indexOf(statusLine ?? DEFAULT_STATUS_LINE) as 0 | 1 | 2
+  }
   const heading = renderHeader(header ?? DEFAULT_HEADER, { focus, state, privacy })
 
   if (privacy === 'full') {
@@ -485,10 +570,11 @@ export function buildActivity({
   }
   // A small image needs a large one to sit on: Discord renders it as a badge in
   // the logo's corner, and on its own it is simply dropped.
-  const smallImage = assets?.smallImage ?? ''
+  const mood = fleetMood(summary)
+  const smallImage = assets?.smallImage ?? mood
   if (largeImage && smallImage) {
     activity.assets = { ...activity.assets, small_image: smallImage }
-    const smallText = assets?.smallText ?? ''
+    const smallText = assets?.smallText ?? (assets?.smallImage === undefined ? MOOD_TEXT[mood] : '')
     if (smallText) {
       activity.assets.small_text = clampField(smallText)
     }
@@ -496,6 +582,10 @@ export function buildActivity({
   const party = describeParty(summary, partyId)
   if (party) {
     activity.party = party
+  }
+  const published = sanitizeButtons(buttons ?? DEFAULT_BUTTONS) ?? []
+  if (published.length > 0) {
+    activity.buttons = published
   }
   activity.instance = false
   return activity

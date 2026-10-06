@@ -36,6 +36,13 @@ export type DecodedFrame = {
  * declared; Discord ignores unknown keys but there is no reason to invent them.
  */
 export type DiscordActivity = {
+    /** Activity type; 0 renders as "Playing <application name>". */
+    type?: 0;
+    /**
+     * Which line Discord shows beside the name in the member list and DM list:
+     * 0 = application name, 1 = `state`, 2 = `details`.
+     */
+    status_display_type?: 0 | 1 | 2;
     details?: string;
     state?: string;
     timestamps?: {
@@ -58,6 +65,11 @@ export type DiscordActivity = {
         id?: string;
         size?: [number, number];
     };
+    /** Up to two link buttons; Discord shows them to everyone but the user. */
+    buttons?: Array<{
+        label: string;
+        url: string;
+    }>;
     instance?: boolean;
 };
 /**

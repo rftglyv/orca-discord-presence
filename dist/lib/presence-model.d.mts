@@ -135,11 +135,40 @@ export declare function nextHeader(current: string): string;
 export type PresenceAssets = {
     largeImage?: string | undefined;
     largeText?: string | undefined;
-    /** Badge in the corner of the logo. Off by default: the shipped application
-     *  hosts no artwork under any other key, so a default would render blank. */
+    /** Badge in the corner of the logo. Unset follows the fleet's mood (see
+     *  `fleetMood`); `""` turns it off; any other key pins that artwork. */
     smallImage?: string | undefined;
     smallText?: string | undefined;
 };
+/**
+ * What the corner badge says at a glance. Attention outranks work: an agent
+ * stuck on a permission prompt is the one thing a viewer — or the user glancing
+ * at their own profile — should notice, even while others keep working.
+ *
+ * Each mood doubles as an art asset key on the shipped application.
+ */
+export type FleetMood = 'working' | 'waiting' | 'idle';
+export declare function fleetMood(summary: PresenceSummary): FleetMood;
+export type PresenceButton = {
+    label: string;
+    url: string;
+};
+/** Shown to everyone viewing the profile — Discord hides buttons from the user themselves. */
+export declare const DEFAULT_BUTTONS: readonly PresenceButton[];
+/**
+ * Keeps only buttons Discord will accept. One bad button makes Discord reject
+ * the whole SET_ACTIVITY, so dropping it here beats losing the card.
+ */
+export declare function sanitizeButtons(raw: unknown): PresenceButton[] | undefined;
+/** Which line the member list shows beside the user's name. */
+export declare const STATUS_LINES: readonly ['name', 'state', 'details'];
+export type StatusLine = (typeof STATUS_LINES)[number];
+/**
+ * `state`, because the fleet summary is the line that changes: "2 agents
+ * working" says more in a member list than the application name does.
+ */
+export declare const DEFAULT_STATUS_LINE: StatusLine;
+export declare function isStatusLine(value: unknown): value is StatusLine;
 export type BuildActivityInput = {
     state: PresenceState;
     focus: WorkspaceContext;
@@ -150,6 +179,10 @@ export type BuildActivityInput = {
     assets?: PresenceAssets | undefined;
     /** Opaque party id; omitted, Discord may not render the party size at all. */
     partyId?: string | undefined;
+    /** `undefined` takes `DEFAULT_BUTTONS`; `[]` publishes none. */
+    buttons?: readonly PresenceButton[] | undefined;
+    /** `undefined` takes `DEFAULT_STATUS_LINE`. */
+    statusLine?: StatusLine | undefined;
 };
 /**
  * Builds the payload handed to SET_ACTIVITY. Returns `null` when nothing should
@@ -164,7 +197,7 @@ export type BuildActivityInput = {
  * went from idle to busy, not process start, so the timer reads as "how long
  * this batch of work has been running".
  */
-export declare function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId }: BuildActivityInput): DiscordActivity | null;
+export declare function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine }: BuildActivityInput): DiscordActivity | null;
 export declare function isPrivacyLevel(value: unknown): value is PrivacyLevel;
 export declare function nextPrivacy(current: PrivacyLevel): PrivacyLevel;
 /**

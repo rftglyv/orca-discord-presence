@@ -354,12 +354,20 @@ test('a configured badge shows up in the status report', async () => {
   await deactivate()
 })
 
-test('no badge is published unless one is configured', async () => {
+test('an unconfigured badge reports the one the fleet is showing', async () => {
   const fake = createFakeOrca()
   await activate(fake.orca)
   await settle()
+  assert.equal((await fake.invoke('presence.status')).smallImage, 'idle')
+  await fake.emit('agent.status.changed', {
+    worktreeId: 'w1',
+    paneKey: 'p1',
+    state: 'working',
+    receivedAt: Date.now()
+  })
+  await settle()
   const status = await fake.invoke('presence.status')
-  assert.equal(status.smallImage, '')
+  assert.equal(status.smallImage, 'working')
   await deactivate()
 })
 

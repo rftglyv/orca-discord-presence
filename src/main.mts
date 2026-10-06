@@ -30,18 +30,23 @@ import {
   deserializeState,
   describeActivity,
   describeWorkspaces,
+  fleetMood,
   isBusy,
+  isStatusLine,
   isPrivacyLevel,
   nextHeader,
   nextPrivacy,
   renderHeader,
   pruneStale,
+  sanitizeButtons,
   serializeState,
   summarize,
   type PresenceAssets,
+  type PresenceButton,
   type PresenceState,
   type PresenceSummary,
-  type PrivacyLevel
+  type PrivacyLevel,
+  type StatusLine
 } from './lib/presence-model.mjs'
 
 const STORAGE_KEY = 'presence-state'
@@ -76,6 +81,9 @@ type PluginSettings = {
   clientId: string
   header: string | undefined
   assets: PresenceAssets
+  /** `undefined` takes the default button; `[]` publishes none. */
+  buttons: PresenceButton[] | undefined
+  statusLine: StatusLine | undefined
 }
 
 export type PresenceStatusReport = {
@@ -91,7 +99,7 @@ export type PresenceStatusReport = {
   headerText: string
   /** Art asset key published as the large image; empty when turned off. */
   largeImage: string
-  /** Art asset key published as the badge; empty unless one is configured. */
+  /** Art asset key published as the badge; follows the fleet unless configured, empty when off. */
   smallImage: string
   summary: PresenceSummary
   lastError: string | null
@@ -155,7 +163,9 @@ class PresenceRuntime {
       largeText: undefined,
       smallImage: undefined,
       smallText: undefined
-    }
+    },
+    buttons: undefined,
+    statusLine: undefined
   }
   #client: DiscordPresenceClient | null = null
   #connecting = false
@@ -219,7 +229,10 @@ class PresenceRuntime {
           largeText: readOptionalString(stored['largeText']),
           smallImage: readOptionalString(stored['smallImage']),
           smallText: readOptionalString(stored['smallText'])
-        }
+        },
+        // `false` is accepted as "no buttons" — friendlier to hand-edit than `[]`.
+        buttons: stored['buttons'] === false ? [] : sanitizeButtons(stored['buttons']),
+        statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined
       }
     } catch (error) {
       this.#orca.log(`settings unavailable, using defaults: ${describeError(error)}`)
@@ -353,7 +366,9 @@ class PresenceRuntime {
       startedAt: this.#busySince,
       header: this.#settings.header,
       assets: this.#settings.assets,
-      partyId: this.#partyId
+      partyId: this.#partyId,
+      buttons: this.#settings.buttons,
+      statusLine: this.#settings.statusLine
     })
     // Why: identical payloads still cost a rate-limit slot, and a fleet can emit
     // many events that do not change what the status would say.
@@ -518,7 +533,8 @@ class PresenceRuntime {
     const header = this.#settings.header ?? DEFAULT_HEADER
     const headerText = this.#renderHeader(header)
     const largeImage = this.#settings.assets.largeImage ?? DEFAULT_LARGE_IMAGE
-    const smallImage = this.#settings.assets.smallImage ?? ''
+    // Unset follows the fleet, so report the badge that is showing right now.
+    const smallImage = this.#settings.assets.smallImage ?? fleetMood(summary)
     const connection = this.#client?.connected
       ? `connected (${this.#client.socketPath})`
       : (this.#lastError ?? 'not connected')

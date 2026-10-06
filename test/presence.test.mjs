@@ -229,22 +229,64 @@ test('an idle fleet publishes no party at all', () => {
   assert.equal(buildActivity({ state, focus: null, privacy: 'minimal' }).party, undefined)
 })
 
-test('a badge is published only when one is configured, and needs a logo', () => {
+test('the badge follows the fleet unless configured, and needs a logo', () => {
   const state = createPresenceState()
   applyAgentStatus(state, { paneKey: 'a', worktreeId: 'w1', state: 'working', receivedAt: 1 })
   const input = { state, focus: null, privacy: 'minimal' }
 
-  // Nothing configured: the shipped application hosts no badge artwork, so
-  // publishing a key would render an empty square.
-  assert.equal(buildActivity(input).assets.small_image, undefined)
+  const working = buildActivity(input).assets
+  assert.equal(working.small_image, 'working')
+  assert.equal(working.small_text, 'Agents working')
 
-  const badged = buildActivity({ ...input, assets: { smallImage: 'busy', smallText: 'Fleet busy' } })
+  // Attention outranks work: one agent on a prompt turns the badge amber.
+  applyAgentStatus(state, { paneKey: 'b', worktreeId: 'w1', state: 'blocked', receivedAt: 1 })
+  assert.equal(buildActivity(input).assets.small_image, 'waiting')
+
+  applyAgentStatus(state, { paneKey: 'a', worktreeId: 'w1', state: 'done', receivedAt: 1 })
+  applyAgentStatus(state, { paneKey: 'b', worktreeId: 'w1', state: 'done', receivedAt: 1 })
+  assert.equal(buildActivity(input).assets.small_image, 'idle')
+
+  // A configured key pins the artwork and carries no automatic tooltip.
+  const badged = buildActivity({ ...input, assets: { smallImage: 'busy' } })
   assert.equal(badged.assets.small_image, 'busy')
-  assert.equal(badged.assets.small_text, 'Fleet busy')
+  assert.equal(badged.assets.small_text, undefined)
+
+  // A blank key turns the badge off.
+  assert.equal(buildActivity({ ...input, assets: { smallImage: '' } }).assets.small_image, undefined)
 
   // A badge without a logo has nothing to sit on and is dropped.
   const noLogo = buildActivity({ ...input, assets: { largeImage: '', smallImage: 'busy' } })
   assert.equal(noLogo.assets, undefined)
+})
+
+test('buttons default to Get Orca, and invalid ones are dropped rather than sent', () => {
+  const input = { state: createPresenceState(), focus: null, privacy: 'minimal' }
+  assert.deepEqual(buildActivity(input).buttons, [{ label: 'Get Orca', url: 'https://onorca.dev' }])
+  assert.equal(buildActivity({ ...input, buttons: [] }).buttons, undefined)
+
+  const mixed = buildActivity({
+    ...input,
+    buttons: [
+      { label: 'x'.repeat(33), url: 'https://a.dev' },
+      { label: 'Repo', url: 'javascript:alert(1)' },
+      { label: 'Site', url: 'https://a.dev' },
+      { label: 'Docs', url: 'https://b.dev' },
+      { label: 'Third', url: 'https://c.dev' }
+    ]
+  })
+  assert.deepEqual(mixed.buttons, [
+    { label: 'Site', url: 'https://a.dev' },
+    { label: 'Docs', url: 'https://b.dev' }
+  ])
+})
+
+test('the member list shows the fleet summary unless configured otherwise', () => {
+  const input = { state: createPresenceState(), focus: null, privacy: 'minimal' }
+  const activity = buildActivity(input)
+  assert.equal(activity.type, 0)
+  assert.equal(activity.status_display_type, 1)
+  assert.equal(buildActivity({ ...input, statusLine: 'name' }).status_display_type, 0)
+  assert.equal(buildActivity({ ...input, statusLine: 'details' }).status_display_type, 2)
 })
 
 test('minimal privacy publishes no project or branch name', () => {
