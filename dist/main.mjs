@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { DiscordPresenceClient } from './lib/discord-ipc.mjs';
-import { DEFAULT_HEADER, DEFAULT_LARGE_IMAGE, DEFAULT_PRIVACY, applyAgentStatus, applyWorktreeCreated, applyWorktreeRemoved, buildActivity, createPresenceState, deserializeState, describeActivity, describeWorkspaces, fleetMood, isBusy, isIdleExpired, isStatusLine, isPrivacyLevel, nextHeader, nextPrivacy, renderHeader, pruneStale, sanitizeButtons, serializeState, summarize } from './lib/presence-model.mjs';
+import { DEFAULT_HEADER, DEFAULT_LARGE_IMAGE, DEFAULT_PRIVACY, applyAgentStatus, applyWorktreeCreated, applyWorktreeRemoved, buildActivity, busyStartedAt, createPresenceState, deserializeState, describeActivity, describeWorkspaces, fleetMood, isBusy, isIdleExpired, isStatusLine, isPrivacyLevel, nextHeader, nextPrivacy, renderHeader, pruneStale, sanitizeButtons, serializeState, summarize } from './lib/presence-model.mjs';
 const STORAGE_KEY = 'presence-state';
 const STORAGE_STARTED_AT_KEY = 'busy-since';
 /**
@@ -267,19 +267,34 @@ class PresenceRuntime {
         else if (this.#idleSince === 0) {
             this.#idleSince = Date.now();
         }
+        // Prefer the agent host's own start stamp: the worker is forked lazily and
+        // events can arrive late, so "now" understates how long work has run. The
+        // window only ever moves earlier while busy, so the timer never jumps ahead
+        // when the longest-running agent finishes before the others.
+        const reportedStart = busy ? busyStartedAt(this.#state, Date.now()) : undefined;
+        if (busy &&
+            this.#busySince !== 0 &&
+            reportedStart !== undefined &&
+            reportedStart < this.#busySince) {
+            this.#busySince = reportedStart;
+            this.#persistBusySince();
+        }
         if (busy && this.#busySince === 0) {
-            this.#busySince = Date.now();
-            if (this.#can('storage')) {
-                void this.#orca.host
-                    .call('storage.set', { key: STORAGE_STARTED_AT_KEY, value: this.#busySince })
-                    .catch(() => { });
-            }
+            this.#busySince = reportedStart ?? Date.now();
+            this.#persistBusySince();
         }
         else if (!busy && this.#busySince !== 0) {
             this.#busySince = 0;
             if (this.#can('storage')) {
                 void this.#orca.host.call('storage.delete', { key: STORAGE_STARTED_AT_KEY }).catch(() => { });
             }
+        }
+    }
+    #persistBusySince() {
+        if (this.#can('storage')) {
+            void this.#orca.host
+                .call('storage.set', { key: STORAGE_STARTED_AT_KEY, value: this.#busySince })
+                .catch(() => { });
         }
     }
     #schedulePublish() {

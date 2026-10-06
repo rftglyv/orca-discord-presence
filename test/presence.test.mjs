@@ -13,6 +13,7 @@ import {
   applyWorktreeCreated,
   applyWorktreeRemoved,
   buildActivity,
+  busyStartedAt,
   busyCount,
   createPresenceState,
   DEFAULT_HEADER,
@@ -535,4 +536,52 @@ test('an idle fleet expires after the configured window, a busy one never does',
   const state = createPresenceState()
   applyAgentStatus(state, { paneKey: 'a', worktreeId: 'w1', state: 'waiting', receivedAt: 1 })
   assert.equal(isIdleExpired({ ...base, summary: summarize(state), now: 1e12 }), false)
+})
+
+test('the busy window starts when the main agent did, not when the event arrived', () => {
+  const now = 10_000_000
+  const state = createPresenceState()
+  const working = (paneKey, startedAt, mainState = 'working') => ({
+    paneKey,
+    worktreeId: 'w1',
+    state: 'working',
+    receivedAt: now,
+    mainAgent: { state: mainState, stateStartedAt: startedAt }
+  })
+
+  applyAgentStatus(state, working('a', now - 5 * 60_000))
+  applyAgentStatus(state, working('b', now - 2 * 60_000))
+  assert.equal(busyStartedAt(state, now), now - 5 * 60_000)
+
+  // A pane kept busy only by a subagent carries the main agent's done stamp,
+  // which says nothing about when the work started.
+  applyAgentStatus(state, working('c', now - 60 * 60_000, 'done'))
+  assert.equal(busyStartedAt(state, now), now - 5 * 60_000)
+
+  // The stamp survives a storage round trip, since the worker can be re-forked mid-stretch.
+  assert.equal(busyStartedAt(deserializeState(serializeState(state)), now), now - 5 * 60_000)
+})
+
+test('implausible start stamps are ignored rather than shown', () => {
+  const now = 10_000_000
+  const at = (startedAt) => {
+    const state = createPresenceState()
+    applyAgentStatus(state, {
+      paneKey: 'a',
+      worktreeId: 'w1',
+      state: 'working',
+      receivedAt: now,
+      mainAgent: { state: 'working', stateStartedAt: startedAt }
+    })
+    return busyStartedAt(state, now)
+  }
+  // An SSH host a little ahead is clamped to now; far ahead is distrusted.
+  assert.equal(at(now + 30_000), now)
+  assert.equal(at(now + 10 * 60_000), undefined)
+  assert.equal(at(now - STALE_STATUS_MS - 1), undefined)
+
+  // Older hosts send no main-agent fact at all.
+  const legacy = createPresenceState()
+  applyAgentStatus(legacy, { paneKey: 'a', worktreeId: 'w1', state: 'working', receivedAt: now })
+  assert.equal(busyStartedAt(legacy, now), undefined)
 })

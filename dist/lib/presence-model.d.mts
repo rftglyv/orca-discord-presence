@@ -58,6 +58,12 @@ export type PaneRecord = {
     worktreeId: string | null;
     state: AgentStatusState;
     receivedAt: number;
+    /**
+     * When the pane's main agent entered its current busy state, as stamped by
+     * the host it runs on. Absent from older hosts and whenever the main agent
+     * itself is not busy (a subagent can keep the pane working after it is done).
+     */
+    startedAt?: number;
 };
 export type PresenceState = {
     worktrees: Map<string, WorktreeRecord>;
@@ -75,6 +81,13 @@ export type PresenceSummary = {
     activeWorktreeIds: string[];
 };
 export declare function createPresenceState(): PresenceState;
+/**
+ * The earliest moment a currently busy main agent started, or `undefined` when
+ * no busy pane carries a usable stamp. Stamps from the future (beyond skew
+ * tolerance) or older than the stale window are ignored rather than trusted —
+ * a timer reading "-3:00" or "40:00:00" is worse than one that starts late.
+ */
+export declare function busyStartedAt(state: PresenceState, now: number): number | undefined;
 export declare function applyWorktreeCreated(state: PresenceState, payload: unknown): PresenceState;
 export declare function applyWorktreeRemoved(state: PresenceState, payload: unknown): PresenceState;
 export declare function applyAgentStatus(state: PresenceState, payload: unknown): PresenceState;

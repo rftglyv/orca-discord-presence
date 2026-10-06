@@ -91,7 +91,17 @@ const FIELD_MAX = 128
 export const STALE_STATUS_MS = 6 * 60 * 60 * 1000
 
 export type WorktreeRecord = { path: string; branch: string }
-export type PaneRecord = { worktreeId: string | null; state: AgentStatusState; receivedAt: number }
+export type PaneRecord = {
+  worktreeId: string | null
+  state: AgentStatusState
+  receivedAt: number
+  /**
+   * When the pane's main agent entered its current busy state, as stamped by
+   * the host it runs on. Absent from older hosts and whenever the main agent
+   * itself is not busy (a subagent can keep the pane working after it is done).
+   */
+  startedAt?: number
+}
 
 export type PresenceState = {
   worktrees: Map<string, WorktreeRecord>
@@ -124,6 +134,38 @@ function asString(value: unknown): string {
 
 function isAgentState(value: unknown): value is AgentStatusState {
   return typeof value === 'string' && (AGENT_STATES as readonly string[]).includes(value)
+}
+
+const BUSY_STATES: ReadonlySet<AgentStatusState> = new Set(['working', 'blocked', 'waiting'])
+
+/**
+ * How far an agent host's clock may run ahead of ours before its start stamp is
+ * distrusted. `stateStartedAt` comes from the machine the agent runs on — an
+ * SSH host's clock, not this one.
+ */
+const CLOCK_SKEW_TOLERANCE_MS = 60_000
+
+/**
+ * The earliest moment a currently busy main agent started, or `undefined` when
+ * no busy pane carries a usable stamp. Stamps from the future (beyond skew
+ * tolerance) or older than the stale window are ignored rather than trusted —
+ * a timer reading "-3:00" or "40:00:00" is worse than one that starts late.
+ */
+export function busyStartedAt(state: PresenceState, now: number): number | undefined {
+  let earliest: number | undefined
+  for (const pane of state.panes.values()) {
+    const startedAt = pane.startedAt
+    if (
+      !BUSY_STATES.has(pane.state) ||
+      startedAt === undefined ||
+      startedAt > now + CLOCK_SKEW_TOLERANCE_MS ||
+      now - startedAt > STALE_STATUS_MS
+    ) {
+      continue
+    }
+    earliest = earliest === undefined ? startedAt : Math.min(earliest, startedAt)
+  }
+  return earliest === undefined ? undefined : Math.min(earliest, now)
 }
 
 export function applyWorktreeCreated(state: PresenceState, payload: unknown): PresenceState {
@@ -163,11 +205,24 @@ export function applyAgentStatus(state: PresenceState, payload: unknown): Presen
   }
   const worktreeId = record?.['worktreeId']
   const receivedAt = record?.['receivedAt']
-  state.panes.set(paneKey, {
+  const pane: PaneRecord = {
     worktreeId: typeof worktreeId === 'string' ? worktreeId : null,
     state: agentState,
     receivedAt: typeof receivedAt === 'number' ? receivedAt : 0
-  })
+  }
+  const mainAgent = asRecord(record?.['mainAgent'])
+  const stateStartedAt = mainAgent?.['stateStartedAt']
+  if (
+    BUSY_STATES.has(agentState) &&
+    isAgentState(mainAgent?.['state']) &&
+    BUSY_STATES.has(mainAgent['state']) &&
+    typeof stateStartedAt === 'number' &&
+    Number.isFinite(stateStartedAt) &&
+    stateStartedAt > 0
+  ) {
+    pane.startedAt = stateStartedAt
+  }
+  state.panes.set(paneKey, pane)
   return state
 }
 
@@ -208,11 +263,16 @@ export function deserializeState(raw: unknown): PresenceState {
     if (record && isAgentState(record['state'])) {
       const worktreeId = record['worktreeId']
       const receivedAt = record['receivedAt']
-      state.panes.set(paneKey, {
+      const startedAt = record['startedAt']
+      const pane: PaneRecord = {
         worktreeId: typeof worktreeId === 'string' ? worktreeId : null,
         state: record['state'],
         receivedAt: typeof receivedAt === 'number' ? receivedAt : 0
-      })
+      }
+      if (typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0) {
+        pane.startedAt = startedAt
+      }
+      state.panes.set(paneKey, pane)
     }
   }
   return state

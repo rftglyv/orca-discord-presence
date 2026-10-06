@@ -437,3 +437,31 @@ test('the idle window defaults to 15 minutes and honours the setting', async () 
   assert.equal(status.idleClearMinutes, 0)
   await deactivate()
 })
+
+test('the elapsed timer starts from the agent host stamp, and only moves earlier', async () => {
+  const fake = createFakeOrca()
+  await activate(fake.orca)
+  await settle()
+  const tenMinutesAgo = Date.now() - 10 * 60_000
+  await fake.emit('agent.status.changed', {
+    worktreeId: 'w1',
+    paneKey: 'p1',
+    state: 'working',
+    receivedAt: Date.now(),
+    mainAgent: { state: 'working', stateStartedAt: tenMinutesAgo }
+  })
+  await settle()
+  assert.equal(fake.storage.get('busy-since'), tenMinutesAgo)
+
+  // A second agent that started later does not drag the timer forward.
+  await fake.emit('agent.status.changed', {
+    worktreeId: 'w1',
+    paneKey: 'p2',
+    state: 'working',
+    receivedAt: Date.now(),
+    mainAgent: { state: 'working', stateStartedAt: Date.now() - 60_000 }
+  })
+  await settle()
+  assert.equal(fake.storage.get('busy-since'), tenMinutesAgo)
+  await deactivate()
+})

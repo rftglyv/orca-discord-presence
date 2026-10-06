@@ -32,6 +32,13 @@ export type AgentStatusChangedPayload = {
     paneKey: string;
     state: AgentStatusState;
     receivedAt: number;
+    /** The main agent beside the combined state; absent from older hosts. */
+    mainAgent?: {
+        state: string;
+        outcome?: string;
+        /** Stamped by the host the agent runs on (an SSH host's own clock). */
+        stateStartedAt: number;
+    };
 };
 /** `PLUGIN_EVENT_NAMES` — a closed set in v0. */
 export type PluginEventMap = {
