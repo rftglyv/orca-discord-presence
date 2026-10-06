@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test",
     "check:orca-compatibility": "node scripts/check-orca-compatibility.mjs",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "preview": "npm run build && node scripts/preview-card.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

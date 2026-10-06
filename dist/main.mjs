@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { DiscordPresenceClient } from './lib/discord-ipc.mjs';
-import { DEFAULT_HEADER, DEFAULT_LARGE_IMAGE, DEFAULT_PRIVACY, applyAgentStatus, applyWorktreeCreated, applyWorktreeRemoved, buildActivity, createPresenceState, deserializeState, describeActivity, describeWorkspaces, fleetMood, isBusy, isStatusLine, isPrivacyLevel, nextHeader, nextPrivacy, renderHeader, pruneStale, sanitizeButtons, serializeState, summarize } from './lib/presence-model.mjs';
+import { DEFAULT_HEADER, DEFAULT_LARGE_IMAGE, DEFAULT_PRIVACY, applyAgentStatus, applyWorktreeCreated, applyWorktreeRemoved, buildActivity, createPresenceState, deserializeState, describeActivity, describeWorkspaces, fleetMood, isBusy, isIdleExpired, isStatusLine, isPrivacyLevel, nextHeader, nextPrivacy, renderHeader, pruneStale, sanitizeButtons, serializeState, summarize } from './lib/presence-model.mjs';
 const STORAGE_KEY = 'presence-state';
 const STORAGE_STARTED_AT_KEY = 'busy-since';
 /**
@@ -31,6 +31,12 @@ const PUBLISH_DEBOUNCE_MS = 1_500;
 const MIN_PUBLISH_INTERVAL_MS = 4_000;
 const FOCUS_POLL_MS = 30_000;
 const RECONNECT_DELAYS_MS = [15_000, 30_000, 60_000];
+/**
+ * How long an idle fleet keeps its card before the status is cleared. The
+ * workspace poll keeps the worker alive indefinitely, so without this a
+ * "Fleet idle" card would sit on the profile all night.
+ */
+export const DEFAULT_IDLE_CLEAR_MINUTES = 15;
 /**
  * Module-scoped because the host ignores whatever `activate` returns and calls
  * the `deactivate` export for teardown — there is nowhere else to hand the
@@ -85,12 +91,26 @@ class PresenceRuntime {
             smallText: undefined
         },
         buttons: undefined,
-        statusLine: undefined
+        statusLine: undefined,
+        idleClearMinutes: DEFAULT_IDLE_CLEAR_MINUTES
     };
     #client = null;
-    #connecting = false;
+    /**
+     * The in-flight connect, shared so a publish that arrives mid-handshake waits
+     * for it instead of being dropped until some later event happens along.
+     */
+    #connecting = null;
     #reconnectAttempt = 0;
     #busySince = 0;
+    /**
+     * When the fleet last went busy→idle. Starts at worker birth: a re-forked
+     * worker cannot know how long the fleet was idle before it, and erring
+     * towards showing the card a little longer beats clearing it early.
+     */
+    #idleSince = Date.now();
+    #idleTimer = null;
+    /** Set once the idle card has been cleared, so later publishes stay quiet. */
+    #idleCleared = false;
     #lastPublishAt = 0;
     #lastPayload = '';
     #focus = null;
@@ -147,7 +167,8 @@ class PresenceRuntime {
                 },
                 // `false` is accepted as "no buttons" — friendlier to hand-edit than `[]`.
                 buttons: stored['buttons'] === false ? [] : sanitizeButtons(stored['buttons']),
-                statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined
+                statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined,
+                idleClearMinutes: readIdleClearMinutes(stored['idleClearMinutes'])
             };
         }
         catch (error) {
@@ -238,6 +259,14 @@ class PresenceRuntime {
      */
     #trackBusyWindow() {
         const busy = isBusy(summarize(this.#state));
+        if (busy) {
+            this.#idleSince = 0;
+            this.#idleCleared = false;
+            this.#cancelIdleTimer();
+        }
+        else if (this.#idleSince === 0) {
+            this.#idleSince = Date.now();
+        }
         if (busy && this.#busySince === 0) {
             this.#busySince = Date.now();
             if (this.#can('storage')) {
@@ -273,6 +302,20 @@ class PresenceRuntime {
             this.#lastError = 'no Discord application id configured';
             return;
         }
+        if (this.#idleExpired()) {
+            if (!this.#idleCleared) {
+                await this.#clearPresence();
+                this.#idleCleared = true;
+            }
+            return;
+        }
+        const client = await this.#ensureClient();
+        if (!client || this.#disposed) {
+            return;
+        }
+        // Built after the connect, not before: a publish that waited out a
+        // handshake must send the state as it is now, not as it was then.
+        this.#scheduleIdleClear();
         const activity = buildActivity({
             state: this.#state,
             focus: this.#focus,
@@ -290,10 +333,6 @@ class PresenceRuntime {
         if (encoded === this.#lastPayload) {
             return;
         }
-        const client = await this.#ensureClient();
-        if (!client) {
-            return;
-        }
         try {
             await client.setActivity(activity);
             this.#lastPayload = encoded;
@@ -309,10 +348,15 @@ class PresenceRuntime {
         if (this.#client?.connected) {
             return this.#client;
         }
-        if (this.#connecting || this.#disposed) {
+        if (this.#disposed) {
             return null;
         }
-        this.#connecting = true;
+        this.#connecting ??= this.#connect().finally(() => {
+            this.#connecting = null;
+        });
+        return this.#connecting;
+    }
+    async #connect() {
         const client = new DiscordPresenceClient({
             clientId: this.#settings.clientId,
             log: (line) => this.#orca.log(line)
@@ -336,9 +380,6 @@ class PresenceRuntime {
             this.#scheduleReconnect();
             return null;
         }
-        finally {
-            this.#connecting = false;
-        }
     }
     #scheduleReconnect() {
         if (this.#disposed || this.#reconnectTimer || !this.#settings.enabled) {
@@ -352,6 +393,34 @@ class PresenceRuntime {
             this.#schedulePublish();
         }, delay);
         this.#reconnectTimer.unref?.();
+    }
+    /** Idle for longer than the configured window, so the card should be gone. */
+    #idleExpired() {
+        return isIdleExpired({
+            summary: summarize(this.#state),
+            idleSince: this.#idleSince,
+            now: Date.now(),
+            idleClearMinutes: this.#settings.idleClearMinutes
+        });
+    }
+    /** Arms a publish for the moment the idle window runs out, which clears the card. */
+    #scheduleIdleClear() {
+        const limitMs = this.#settings.idleClearMinutes * 60_000;
+        if (this.#idleTimer || limitMs <= 0 || this.#idleSince === 0) {
+            return;
+        }
+        const delay = Math.max(0, this.#idleSince + limitMs - Date.now());
+        this.#idleTimer = setTimeout(() => {
+            this.#idleTimer = null;
+            void this.#publish();
+        }, delay);
+        this.#idleTimer.unref?.();
+    }
+    #cancelIdleTimer() {
+        if (this.#idleTimer) {
+            clearTimeout(this.#idleTimer);
+            this.#idleTimer = null;
+        }
     }
     async toggleEnabled() {
         this.#settings.enabled = !this.#settings.enabled;
@@ -464,6 +533,8 @@ class PresenceRuntime {
             largeImage,
             smallImage,
             summary,
+            idleClearMinutes: this.#settings.idleClearMinutes,
+            idleCleared: this.#idleCleared,
             lastError: this.#lastError
         };
     }
@@ -525,6 +596,7 @@ class PresenceRuntime {
         if (this.#focusTimer) {
             clearInterval(this.#focusTimer);
         }
+        this.#cancelIdleTimer();
         this.#publishTimer = null;
         this.#reconnectTimer = null;
         this.#focusTimer = null;
@@ -539,6 +611,12 @@ function sameFocus(left, right) {
 }
 function describeError(error) {
     return error instanceof Error ? error.message : String(error);
+}
+/** Whole minutes, 0 or more; anything else takes the default. */
+function readIdleClearMinutes(configured) {
+    return typeof configured === 'number' && Number.isFinite(configured) && configured >= 0
+        ? configured
+        : DEFAULT_IDLE_CLEAR_MINUTES;
 }
 /** A configured id wins; anything blank or non-string falls back to the default. */
 function readClientId(configured) {

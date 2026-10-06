@@ -420,3 +420,20 @@ test('malformed events do not take the worker down', async () => {
   assert.equal(status.summary.panes, 0)
   await deactivate()
 })
+
+test('the idle window defaults to 15 minutes and honours the setting', async () => {
+  const fake = createFakeOrca()
+  await activate(fake.orca)
+  await settle()
+  let status = await fake.invoke('presence.status')
+  assert.equal(status.idleClearMinutes, 15)
+  assert.equal(status.idleCleared, false)
+  await deactivate()
+
+  const tuned = createFakeOrca({ settings: { idleClearMinutes: 0 } })
+  await activate(tuned.orca)
+  await settle()
+  status = await tuned.invoke('presence.status')
+  assert.equal(status.idleClearMinutes, 0)
+  await deactivate()
+})

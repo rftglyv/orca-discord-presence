@@ -23,6 +23,7 @@ import {
   describeWorkspaces,
   HEADER_PRESETS,
   isBusy,
+  isIdleExpired,
   nextHeader,
   nextPrivacy,
   pruneStale,
@@ -520,4 +521,18 @@ test('privacy cycles through every level and returns', () => {
   assert.equal(nextPrivacy('full'), 'minimal')
   assert.equal(nextPrivacy('minimal'), 'off')
   assert.equal(nextPrivacy('off'), 'full')
+})
+
+test('an idle fleet expires after the configured window, a busy one never does', () => {
+  const idle = summarize(createPresenceState())
+  const base = { summary: idle, idleSince: 1_000, idleClearMinutes: 15 }
+  assert.equal(isIdleExpired({ ...base, now: 1_000 + 14 * 60_000 }), false)
+  assert.equal(isIdleExpired({ ...base, now: 1_000 + 15 * 60_000 }), true)
+
+  // 0 keeps the idle card forever.
+  assert.equal(isIdleExpired({ ...base, idleClearMinutes: 0, now: 1e12 }), false)
+
+  const state = createPresenceState()
+  applyAgentStatus(state, { paneKey: 'a', worktreeId: 'w1', state: 'waiting', receivedAt: 1 })
+  assert.equal(isIdleExpired({ ...base, summary: summarize(state), now: 1e12 }), false)
 })

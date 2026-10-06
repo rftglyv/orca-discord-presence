@@ -637,3 +637,22 @@ export function isBusy(summary: PresenceSummary): boolean {
 export function busyCount(summary: PresenceSummary): number {
   return summary.working + summary.blocked + summary.waiting
 }
+
+/**
+ * True once an idle fleet has kept its card for `idleClearMinutes`. A busy
+ * fleet never expires, and `0` minutes means "keep the idle card forever".
+ */
+export function isIdleExpired({
+  summary,
+  idleSince,
+  now,
+  idleClearMinutes
+}: {
+  summary: PresenceSummary
+  idleSince: number
+  now: number
+  idleClearMinutes: number
+}): boolean {
+  const limitMs = idleClearMinutes * 60_000
+  return limitMs > 0 && idleSince > 0 && !isBusy(summary) && now - idleSince >= limitMs
+}

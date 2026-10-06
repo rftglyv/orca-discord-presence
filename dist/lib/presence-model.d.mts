@@ -210,3 +210,13 @@ export declare function nextPrivacy(current: PrivacyLevel): PrivacyLevel;
 export declare function isBusy(summary: PresenceSummary): boolean;
 /** Agents the fleet still owes work on — the `current` half of the party size. */
 export declare function busyCount(summary: PresenceSummary): number;
+/**
+ * True once an idle fleet has kept its card for `idleClearMinutes`. A busy
+ * fleet never expires, and `0` minutes means "keep the idle card forever".
+ */
+export declare function isIdleExpired({ summary, idleSince, now, idleClearMinutes }: {
+    summary: PresenceSummary;
+    idleSince: number;
+    now: number;
+    idleClearMinutes: number;
+}): boolean;

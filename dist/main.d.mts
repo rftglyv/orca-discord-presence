@@ -22,6 +22,12 @@ import { type PresenceSummary, type PrivacyLevel } from './lib/presence-model.mj
  * application's name is what Discord shows as the "Playing …" line).
  */
 export declare const DEFAULT_CLIENT_ID = "1557157916279185418";
+/**
+ * How long an idle fleet keeps its card before the status is cleared. The
+ * workspace poll keeps the worker alive indefinitely, so without this a
+ * "Fleet idle" card would sit on the profile all night.
+ */
+export declare const DEFAULT_IDLE_CLEAR_MINUTES = 15;
 export type PresenceStatusReport = {
     enabled: boolean;
     privacy: PrivacyLevel;
@@ -38,6 +44,10 @@ export type PresenceStatusReport = {
     /** Art asset key published as the badge; follows the fleet unless configured, empty when off. */
     smallImage: string;
     summary: PresenceSummary;
+    /** Minutes an idle fleet keeps its card; 0 keeps it forever. */
+    idleClearMinutes: number;
+    /** True when the idle window has run out and the card has been cleared. */
+    idleCleared: boolean;
     lastError: string | null;
 };
 export default function activate(orca: OrcaPluginApi): void;
