@@ -57,7 +57,7 @@ const STORAGE_STARTED_AT_KEY = 'busy-since'
  * `clientId` in settings to publish under your own application instead (the
  * application's name is what Discord shows as the "Playing …" line).
  */
-export const DEFAULT_CLIENT_ID = '1534192299926360234'
+export const DEFAULT_CLIENT_ID = '1557157916279185418'
 
 /** Coalesce bursts: a single agent transition can fan out several events. */
 const PUBLISH_DEBOUNCE_MS = 1_500

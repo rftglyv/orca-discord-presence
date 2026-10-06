@@ -21,7 +21,7 @@ import { type PresenceSummary, type PrivacyLevel } from './lib/presence-model.mj
  * `clientId` in settings to publish under your own application instead (the
  * application's name is what Discord shows as the "Playing …" line).
  */
-export declare const DEFAULT_CLIENT_ID = "1534192299926360234";
+export declare const DEFAULT_CLIENT_ID = "1557157916279185418";
 export type PresenceStatusReport = {
     enabled: boolean;
     privacy: PrivacyLevel;
