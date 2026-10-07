@@ -3,7 +3,7 @@
   "id": "discord-presence",
   "publisher": "rftglyv",
   "name": "Discord Presence",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Publishes what your Orca agent fleet is doing to your Discord status via local Rich Presence IPC.",
   "author": { "name": "rftglyv" },
   "repository": "https://github.com/rftglyv/orca-discord-presence",

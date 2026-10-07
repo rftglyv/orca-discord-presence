@@ -21,6 +21,7 @@ export declare const FRIENDLY_HOST = "orcadcrpc.localhost";
 export type SettingsServerHandlers = {
     snapshot: () => unknown;
     update: (patch: unknown) => Promise<unknown>;
+    reconnect: () => Promise<unknown>;
 };
 export type SettingsServer = {
     url: string;

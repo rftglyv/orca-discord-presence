@@ -44,7 +44,7 @@ function send(response, status, body, type = 'application/json; charset=utf-8') 
         'Referrer-Policy': 'no-referrer',
         // The page is served to the user's own browser; nothing may frame it.
         'X-Frame-Options': 'DENY',
-        'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+        'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
     });
     response.end(body);
 }
@@ -127,6 +127,10 @@ export async function startSettingsServer({ token, handlers, artDir, preferredPo
                 }
                 if (request.method === 'GET' && url.pathname === '/api/state') {
                     send(response, 200, JSON.stringify(handlers.snapshot()));
+                    return;
+                }
+                if (request.method === 'POST' && url.pathname === '/api/reconnect') {
+                    send(response, 200, JSON.stringify(await handlers.reconnect()));
                     return;
                 }
                 if (request.method === 'POST' && url.pathname === '/api/settings') {

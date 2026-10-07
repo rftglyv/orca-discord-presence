@@ -577,16 +577,20 @@ class PresenceRuntime {
             artDir: fileURLToPath(new URL('../assets/discord', import.meta.url)),
             handlers: {
                 snapshot: () => this.settingsSnapshot(),
-                update: (patch) => this.updateSettings(patch)
+                update: (patch) => this.updateSettings(patch),
+                reconnect: () => this.reconnectFromSettings()
             }
         });
     }
     /** What the settings page renders: stored values, the live card, and connection state. */
     settingsSnapshot() {
         const now = Date.now();
+        // The preview mirrors Discord: nothing while publishing is off or after
+        // the idle window has cleared the card.
+        const showing = this.#settings.enabled && !this.#idleExpired();
         return {
             settings: { ...this.#rawSettings },
-            preview: buildActivity({
+            preview: !showing ? null : buildActivity({
                 ...this.#rotationFrame(now),
                 now,
                 state: this.#state,
@@ -599,6 +603,7 @@ class PresenceRuntime {
                 buttons: this.#settings.buttons,
                 statusLine: this.#settings.statusLine
             }),
+            enabled: this.#settings.enabled,
             defaultTaglines: DEFAULT_TAGLINES,
             stats: describeStats(this.#stats, now),
             connected: Boolean(this.#client?.connected),
@@ -668,6 +673,15 @@ class PresenceRuntime {
      * waiting out the backoff.
      */
     async reconnectNow() {
+        await this.#reconnect();
+        return this.reportStatus();
+    }
+    /** The settings page's Reconnect button: same as the command, minus the notification. */
+    async reconnectFromSettings() {
+        await this.#reconnect();
+        return this.settingsSnapshot();
+    }
+    async #reconnect() {
         if (this.#reconnectTimer) {
             clearTimeout(this.#reconnectTimer);
             this.#reconnectTimer = null;
@@ -676,11 +690,17 @@ class PresenceRuntime {
         this.#lastPayload = '';
         this.#client?.close();
         this.#client = null;
-        if (this.#settings.enabled && this.#settings.privacy !== 'off') {
-            await this.#refreshFocus();
-            await this.#publish();
+        if (!this.#settings.enabled || this.#settings.privacy === 'off') {
+            return;
         }
-        return this.reportStatus();
+        await this.#refreshFocus();
+        if (this.#idleExpired()) {
+            // Nothing to show, but the user asked to reconnect: prove Discord is
+            // reachable so the next busy agent publishes straight away.
+            await this.#ensureClient();
+            return;
+        }
+        await this.#publish();
     }
     async reportStatus() {
         // The command is an explicit request for current truth; do not make the
@@ -807,6 +827,9 @@ function describeError(error) {
  * opener (a headless Linux box) must cost a log line, not the worker.
  */
 function openInBrowser(url, log) {
+    if (process.env['ORCA_DISCORD_PRESENCE_NO_BROWSER'] === '1') {
+        return;
+    }
     const [command, args] = process.platform === 'darwin'
         ? ['open', [url]]
         : process.platform === 'win32'

@@ -63,6 +63,7 @@ export type SettingsSnapshot = {
     settings: Record<string, JsonValue>;
     /** The card as it would publish right now; `null` when nothing would show. */
     preview: DiscordActivity | null;
+    enabled: boolean;
     defaultTaglines: readonly string[];
     stats: string[];
     connected: boolean;

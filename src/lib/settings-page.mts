@@ -51,8 +51,16 @@ export const SETTINGS_PAGE_HTML = String.raw`<!doctype html>
     background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
     padding: 7px 9px; font: inherit; min-width: 0;
   }
+  input[type=text], input[type=url], input[type=number], select { height: 36px; }
   input[type=text], input[type=url] { width: 240px; }
-  input[type=number] { width: 84px; }
+  input[type=number] { width: 96px; }
+  select {
+    -webkit-appearance: none; appearance: none; width: 180px; padding: 0 34px 0 11px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23b5bac1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center;
+  }
+  select:hover, input:hover, textarea:hover { border-color: #4e5058; }
+  select option { background: var(--panel); color: var(--text); }
   textarea { width: 100%; min-height: 160px; resize: vertical; margin-top: 8px; }
   input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .switch { position: relative; width: 40px; height: 24px; flex: none; display: inline-block; cursor: pointer; }
@@ -67,6 +75,12 @@ export const SETTINGS_PAGE_HTML = String.raw`<!doctype html>
   .switch input:checked + span { background: var(--green); }
   .switch input:checked + span::after { transform: translateX(16px); }
   .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.ghost {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button.ghost:hover { background: var(--line); }
+  button.ghost:disabled { opacity: .6; cursor: progress; }
   button.link { background: none; border: 0; color: #00a8fc; cursor: pointer; padding: 0; font: inherit; }
   aside { position: sticky; top: 84px; align-self: start; }
   .card { background: var(--panel); border-radius: 10px; padding: 14px; }
@@ -102,6 +116,7 @@ export const SETTINGS_PAGE_HTML = String.raw`<!doctype html>
   <img src="/art/orca.png" alt="">
   <h1>Discord Presence</h1>
   <span id="conn" class="pill">…</span>
+  <button id="reconnect" class="ghost" type="button">Reconnect</button>
 </header>
 <main>
   <div>
@@ -234,8 +249,9 @@ function renderPreview() {
   var box = $('preview')
   box.textContent = ''
   var conn = $('conn')
-  conn.textContent = state.connected ? 'Connected to Discord' : (state.idleCleared ? 'Idle — card cleared' : 'Not connected')
+  conn.textContent = state.connected ? 'Connected to Discord' : 'Not connected to Discord'
   conn.className = 'pill ' + (state.connected ? 'on' : 'off')
+  conn.title = state.connected ? '' : (state.lastError || 'Is the Discord desktop app running?')
 
   var stats = $('statsList')
   stats.textContent = ''
@@ -243,7 +259,12 @@ function renderPreview() {
 
   var a = state.preview
   if (!a) {
-    box.appendChild(el('div', 'empty', 'Nothing is shown — the card is off.'))
+    var why = !state.enabled
+      ? 'Nothing is shown: "Show my activity" is off.'
+      : state.settings.privacy === 'off'
+        ? 'Nothing is shown: privacy is set to Off.'
+        : 'Nothing is shown: the fleet has been idle, so the card was cleared. It comes back when an agent starts working.'
+    box.appendChild(el('div', 'empty', why))
     $('member').textContent = ''
     return
   }
@@ -317,8 +338,8 @@ function wire() {
       if (input.type === 'checkbox') return queue(key, input.checked)
       if (input.type === 'number') return queue(key, input.value === '' ? null : Number(input.value))
       var text = input.value.trim()
-      // Empty text resets to the default, except the header, where empty means hidden.
-      queue(key, text === '' && key !== 'header' ? null : text)
+      // Empty text resets the setting to its default (the placeholder shows it).
+      queue(key, text === '' ? null : text)
     }
     input.addEventListener(input.type === 'checkbox' || input.tagName === 'SELECT' ? 'change' : 'input', handler)
   })
@@ -335,6 +356,17 @@ function wire() {
   ;['btnOn', 'btnLabel', 'btnUrl'].forEach(function (id) {
     $(id).addEventListener(id === 'btnOn' ? 'change' : 'input', buttonChange)
   })
+  $('reconnect').addEventListener('click', function () {
+    var button = this
+    button.disabled = true
+    button.textContent = 'Connecting…'
+    api('POST', '/api/reconnect').then(function (next) {
+      state = next
+      renderPreview()
+      toast(state.connected ? 'Connected to Discord' : 'Could not connect: ' + (state.lastError || 'is Discord running?'), !state.connected)
+    }).catch(function (error) { toast('Reconnect failed: ' + error.message, true) })
+      .then(function () { button.disabled = false; button.textContent = 'Reconnect' })
+  })
   $('loadDefaults').addEventListener('click', function () {
     $('customTaglines').value = state.defaultTaglines.join('\n')
     $('customTaglines').dispatchEvent(new Event('input'))
@@ -342,7 +374,15 @@ function wire() {
 }
 
 function refresh() {
-  return api('GET', '/api/state').then(function (next) { state = next; renderPreview() })
+  return api('GET', '/api/state').then(function (next) {
+    var changed = JSON.stringify(next.settings) !== JSON.stringify(state.settings)
+    state = next
+    // Another tab, or an Orca command, changed something: show it — unless
+    // the user is mid-edit here, where overwriting their typing would be worse.
+    var editing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
+    if (changed && !editing) fillForm()
+    renderPreview()
+  })
 }
 
 api('GET', '/api/state').then(function (first) {

@@ -42,10 +42,10 @@ Nothing else. The plugin ships with a Discord application id and starts publishi
 Settings → Plugins → *Add marketplace*, paste the URL, and accept the consent dialog:
 
 ```text
-https://github.com/rftglyv/orca-discord-presence.git#v0.4.0
+https://github.com/rftglyv/orca-discord-presence.git#v0.4.1
 ```
 
-The `#v0.4.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
+The `#v0.4.1` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
 
 ## Privacy
 
@@ -86,7 +86,7 @@ Every command shows up under **Settings → Shortcuts → Plugins**, where you c
 
 ### The settings page
 
-**Discord Presence: Open Settings** starts a small web server inside the plugin and opens `http://orcadcrpc.localhost:47317` in your browser. Bookmark it: it works whenever Orca is running and the plugin has started. (If port 47317 is taken, the command opens whichever port it got instead.)
+**Discord Presence: Open Settings** starts a small web server inside the plugin and opens `http://orcadcrpc.localhost:47317` in your browser. Bookmark it: it works whenever Orca is running and the plugin has started. The **Reconnect** button at the top retries the Discord connection right away, which helps if you started Discord after Orca. The form also picks up changes made in another tab or by an Orca command. (If port 47317 is taken, the command opens whichever port it got instead.)
 
 Every `*.localhost` name points at your own machine without any DNS or hosts-file change, which is how the friendly name works. A bare word like `orcadcrpc` with no `.localhost` would not: browsers treat it as a search, and claiming a name like that needs admin rights to edit `/etc/hosts`.
 

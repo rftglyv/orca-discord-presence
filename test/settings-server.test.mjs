@@ -34,6 +34,7 @@ async function withServer(run) {
     preferredPort: 0,
     handlers: {
       snapshot: () => ({ settings }),
+      reconnect: async () => ({ reconnected: true }),
       update: async (patch) => {
         settings = { ...settings, ...patch }
         return { settings }
@@ -119,5 +120,14 @@ test('card artwork is served for the preview, and nothing else from disk', async
     assert.equal(art.headers['content-type'], 'image/png')
     assert.equal((await request(base + '/art/..%2F..%2Fpackage.json')).status, 404)
     assert.equal((await request(base + '/art/secret.png')).status, 404)
+  })
+})
+
+test('the reconnect route needs the token and calls through', async () => {
+  await withServer(async ({ base, token }) => {
+    assert.equal((await request(base + '/api/reconnect', { method: 'POST' })).status, 403)
+    const ok = await request(base + '/api/reconnect', { method: 'POST', headers: { 'X-Settings-Token': token } })
+    assert.equal(ok.status, 200)
+    assert.deepEqual(JSON.parse(ok.body), { reconnected: true })
   })
 })

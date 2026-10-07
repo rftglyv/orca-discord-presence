@@ -155,3 +155,13 @@ test('a stats frame replaces the fleet line', () => {
   })
   assert.equal(activity.state, 'Today: 3 tasks done · 1h agent time')
 })
+
+test('a button link typed without https:// still works', () => {
+  const activity = buildActivity({
+    state: createPresenceState(),
+    focus: null,
+    privacy: 'minimal',
+    buttons: [{ label: 'Repo', url: 'github.com/rftglyv' }]
+  })
+  assert.deepEqual(activity.buttons, [{ label: 'Repo', url: 'https://github.com/rftglyv' }])
+})

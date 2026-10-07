@@ -442,7 +442,12 @@ export function sanitizeButtons(raw) {
     for (const entry of raw) {
         const record = asRecord(entry);
         const label = asString(record?.['label']).trim();
-        const url = asString(record?.['url']).trim();
+        let url = asString(record?.['url']).trim();
+        // People type "github.com/me", not "https://github.com/me". A bare domain
+        // gets https:// rather than silently losing the button.
+        if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(url)) {
+            url = `https://${url}`;
+        }
         if (label.length > 0 &&
             label.length <= BUTTON_LABEL_MAX &&
             url.length <= BUTTON_URL_MAX &&
