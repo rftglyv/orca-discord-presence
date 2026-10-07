@@ -1,6 +1,6 @@
 {
   "name": "orca-discord-presence",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Publishes your Orca agent fleet's activity to Discord Rich Presence.",
   "private": true,
   "type": "module",

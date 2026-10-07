@@ -17,7 +17,7 @@ Playing Orca ADE
           [ Get Orca ]
 ```
 
-**Everything is set from a settings page:** run **Discord Presence: Open Settings** in Orca, or visit **http://orcadcrpc.localhost:47317** while Orca is running. Every field has a switch, and a live preview shows the card as Discord will.
+**Everything is set from a settings page:** visit **http://orcadcrpc.localhost:47317**, or run **Discord Presence: Open Settings** in Orca. Every field has a switch, and a live preview shows the card as Discord will.
 
 - **Top line:** one of 50 built-in taglines ("Claude codes the best", "Codex is cooking", …) or your own list, in a shuffled order that only repeats once all have been shown. Turn taglines off and the line shows your **header** instead, which can name the workspace and branch at `full` privacy. While taglines rotate, the header moves to the logo's hover text.
 - **Bottom line:** the live fleet, including how long an agent has been waiting on you, alternating with **today's stats** (tasks finished, agent time) and **all-time stats**. The party gauge counts busy agents out of the agents Orca has announced.
@@ -42,10 +42,10 @@ Nothing else. The plugin ships with a Discord application id and starts publishi
 Settings → Plugins → *Add marketplace*, paste the URL, and accept the consent dialog:
 
 ```text
-https://github.com/rftglyv/orca-discord-presence.git#v0.4.1
+https://github.com/rftglyv/orca-discord-presence.git#v0.4.2
 ```
 
-The `#v0.4.1` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
+The `#v0.4.2` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
 
 ## Privacy
 
@@ -86,7 +86,7 @@ Every command shows up under **Settings → Shortcuts → Plugins**, where you c
 
 ### The settings page
 
-**Discord Presence: Open Settings** starts a small web server inside the plugin and opens `http://orcadcrpc.localhost:47317` in your browser. Bookmark it: it works whenever Orca is running and the plugin has started. The **Reconnect** button at the top retries the Discord connection right away, which helps if you started Discord after Orca. The form also picks up changes made in another tab or by an Orca command. (If port 47317 is taken, the command opens whichever port it got instead.)
+The plugin serves the page at `http://orcadcrpc.localhost:47317` from the moment it starts; **Discord Presence: Open Settings** opens it in your browser. Bookmark it. One catch: Orca starts a plugin on its first trigger, so right after Orca launches the page answers once an agent has reported a status, or as soon as you run any Discord Presence command. The **Reconnect** button at the top retries the Discord connection right away, which helps if you started Discord after Orca. The form also picks up changes made in another tab or by an Orca command. (If port 47317 is taken, the plugin uses another port; the command always opens the right one.)
 
 Every `*.localhost` name points at your own machine without any DNS or hosts-file change, which is how the friendly name works. A bare word like `orcadcrpc` with no `.localhost` would not: browsers treat it as a search, and claiming a name like that needs admin rights to edit `/etc/hosts`.
 
