@@ -29,7 +29,9 @@ const SANDBOX_SUBDIRS = [
   'app/com.discordapp.DiscordCanary',
   'app/com.discordapp.DiscordPTB',
   'snap.discord',
-  'snap.discord-canary'
+  'snap.discord-canary',
+  // Vesktop (Vencord's desktop client) as a Flatpak, which also speaks the IPC protocol.
+  'app/dev.vencord.Vesktop'
 ] as const
 
 export type SocketProbeOptions = {

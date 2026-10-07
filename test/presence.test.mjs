@@ -94,6 +94,7 @@ test('candidate paths cover flatpak and snap layouts', () => {
   assert.ok(paths.includes('/run/user/1000/discord-ipc-0'))
   assert.ok(paths.includes('/run/user/1000/app/com.discordapp.Discord/discord-ipc-0'))
   assert.ok(paths.includes('/run/user/1000/snap.discord/discord-ipc-0'))
+  assert.ok(paths.includes('/run/user/1000/app/dev.vencord.Vesktop/discord-ipc-0'))
 })
 
 test('windows candidates are named pipes', () => {

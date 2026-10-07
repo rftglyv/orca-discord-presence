@@ -6,22 +6,25 @@ Publishes what your [Orca](https://github.com/stablyai/orca) agent fleet is doin
 
 ```text
 Playing Orca ADE
-┌──────┐  Orca                                              ← minimal (default)
-│ logo │  2 agents working · 1 blocked · across 2 worktrees   (3 of 5)
+┌──────┐  Claude codes the best                          ← tagline, rotates every 45s
+│ logo │  2 agents working · 1 blocked for 4m   (3 of 5)  ← live fleet…
 └────🟡┘  00:14 elapsed
           [ Get Orca ]
 
-┌──────┐  Orca · checkout-service · feat/ipc                ← full
-│ logo │  2 agents working · in checkout-service, web   (2 of 5)
+┌──────┐  Agents assembled
+│ logo │  Today: 14 tasks done · 3h 40m agent time       ← …or today's stats
 └────🟢┘  00:14 elapsed
           [ Get Orca ]
 ```
 
-Line one is the **header**, and it is yours to set. Line two is the fleet, ending in Discord's own party gauge: busy agents out of the agents Orca has announced. The timer measures the current stretch of work — from the moment the agent itself started, as stamped by Orca — not how long Orca has been open.
+**Everything is set from a settings page:** run **Discord Presence: Open Settings** in Orca, or visit **http://orcadcrpc.localhost:47317** while Orca is running. Every field has a switch, and a live preview shows the card as Discord will.
 
-The badge in the logo's corner follows the fleet: 🟢 working, 🟡 an agent is waiting on you, ⚪ idle. Waiting outranks working, so a stuck prompt is what a glance at your profile shows. In the member list, your name carries the fleet line ("2 agents working") rather than the application name.
-
-An idle card does not linger: after 15 quiet minutes the status clears, and it comes back the moment an agent gets busy.
+- **Top line:** one of 50 built-in taglines ("Claude codes the best", "Codex is cooking", …) or your own list, in a shuffled order that only repeats once all have been shown. Turn taglines off and the line shows your **header** instead, which can name the workspace and branch at `full` privacy. While taglines rotate, the header moves to the logo's hover text.
+- **Bottom line:** the live fleet, including how long an agent has been waiting on you, alternating with **today's stats** (tasks finished, agent time) and **all-time stats**. The party gauge counts busy agents out of the agents Orca has announced.
+- **Timer:** the current stretch of work, from the moment the agent itself started, as stamped by Orca.
+- **Badge:** in the logo's corner, following the fleet: 🟢 working, 🟡 an agent is waiting on you, ⚪ idle. Waiting outranks working.
+- **Member list:** your name carries the fleet line ("2 agents working") instead of the application name.
+- **Idle:** after 15 quiet minutes the status clears. It comes back the moment an agent gets busy, and an idle card notes an interrupted last run.
 
 An agent counts as busy while it is `working`, `blocked`, or `waiting` — Orca renders the last two identically, as "agent needs user attention", so a fleet sitting on permission prompts keeps the timer running instead of reading as idle.
 
@@ -39,10 +42,10 @@ Nothing else. The plugin ships with a Discord application id and starts publishi
 Settings → Plugins → *Add marketplace*, paste the URL, and accept the consent dialog:
 
 ```text
-https://github.com/rftglyv/orca-discord-presence.git#v0.3.0
+https://github.com/rftglyv/orca-discord-presence.git#v0.4.0
 ```
 
-The `#v0.3.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
+The `#v0.4.0` matters: without it Orca reads the index off `main`, which moves. The dialog lists the [capabilities](#capabilities-requested) below. To hack on the plugin instead, see [Development](#development).
 
 ## Privacy
 
@@ -62,6 +65,7 @@ Workspace names come from the worktree's directory name, falling back to its bra
 
 | Command | Effect |
 | --- | --- |
+| `Discord Presence: Open Settings` | Opens the settings page in your browser — see [The settings page](#the-settings-page) |
 | `Discord Presence: Toggle` | Enable/disable publishing |
 | `Discord Presence: Cycle Privacy Level` | Sets the level from the command's argument, or cycles `full` → `minimal` → `off` → … without one |
 | `Discord Presence: Set Header` | Sets line one from the command's argument, or cycles the presets without one |
@@ -79,6 +83,20 @@ Every command shows up under **Settings → Shortcuts → Plugins**, where you c
 **The plugin ships no default chords, deliberately.** A manifest keybinding is *instructional content* to Orca: declaring one binds your consent to the plugin's file tree, so every release would arrive as *Needs review* in Settings → Plugins, and a chord that collided with another plugin's would disable **both** plugins' commands. A shortcut you record yourself is an override — it survives updates and costs neither.
 
 ## Configuration
+
+### The settings page
+
+**Discord Presence: Open Settings** starts a small web server inside the plugin and opens `http://orcadcrpc.localhost:47317` in your browser. Bookmark it: it works whenever Orca is running and the plugin has started. (If port 47317 is taken, the command opens whichever port it got instead.)
+
+Every `*.localhost` name points at your own machine without any DNS or hosts-file change, which is how the friendly name works. A bare word like `orcadcrpc` with no `.localhost` would not: browsers treat it as a search, and claiming a name like that needs admin rights to edit `/etc/hosts`.
+
+The server only answers on your machine (`127.0.0.1` and `::1`), and only to requests that name it as `localhost`, `orcadcrpc.localhost` or the loopback address, so a website using DNS tricks cannot reach it. Saving needs a token that only the page itself can read, and requests from other sites are refused. Settings saved here go through the same validation as the settings file below.
+
+### Taglines and stats
+
+The 50 built-in taglines live in `src/lib/taglines.mts`. To use your own, paste them into **My taglines** on the settings page (one per line, 2–128 characters) or set `customTaglines` in the settings file.
+
+Stats count a **task** as one agent going busy and coming back to `done`; a detour through a permission prompt does not count twice. **Agent time** adds up those stretches, using Orca's own start time when it has one. "Today" resets at local midnight. Stats are kept in plugin storage, so they survive Orca restarts.
 
 Every setting has a working default; this section is for changing them.
 
@@ -160,6 +178,10 @@ Orca has no UI for per-plugin settings yet, so anything the commands do not cove
 | `buttons` | Get Orca | Up to two `{ "label", "url" }` link buttons; `[]` or `false` publishes none |
 | `statusLine` | `"state"` | Member-list line: `"state"`, `"details"`, or `"name"` |
 | `idleClearMinutes` | `15` | Minutes an idle card stays up before the status clears; `0` keeps it |
+| `taglines` | `true` | Rotate taglines through the top line; `false` shows the header |
+| `customTaglines` | *(built-in 50)* | Your own list of taglines |
+| `showStats` | `true` | Rotate today's and all-time stats through the bottom line |
+| `rotateSeconds` | `45` | Seconds between rotations; never faster than 20 |
 
 Every key is optional, and `""` means *off* rather than *default*. Restart Orca, or disable and re-enable the plugin, to pick the file up.
 
@@ -169,11 +191,13 @@ Every key is optional, and `""` means *off* rather than *default*. Restart Orca,
 | --- | --- |
 | `workspace:read` | Focused workspace name and branch, for `full` privacy |
 | `events:subscribe` | Worktree lifecycle and agent status changes — the data being published |
-| `storage` | Fleet state survives worker reaps (see below) |
+| `storage` | Fleet state, stats, and the settings-page token survive restarts |
 | `settings:own` | The plugin's own `enabled` / `privacy` / `clientId` / `header` / artwork keys |
 | `notifications:show` | Command feedback |
 
 `secrets` and `terminal:send` are deliberately **not** requested.
+
+Beyond these, the plugin opens two local connections that Orca has no permission setting for yet: the Discord IPC socket, and the settings-page server on `127.0.0.1` / `::1` (only after you run **Open Settings**).
 
 ## Compatibility
 
@@ -235,7 +259,8 @@ npm install
 npm run build      # tsc → dist/
 npm test           # build + node --test
 npm run typecheck  # no emit
-npm run preview -- waiting 60   # show a sample card (working | waiting | idle) for 60s
+npm run preview -- waiting 60   # show a sample card (working | waiting | idle | stats) for 60s
+npm run dev:host -- 10          # run the plugin outside Orca for 10 min, with fake agents and the settings page
 ```
 
 Settings → Plugins → *Add development plugin* and pick the checkout directory to load it into Orca.
