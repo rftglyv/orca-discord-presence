@@ -9,8 +9,9 @@
  * been quiet for a few minutes, and comes back on the next agent event. State
  * survives the gap in plugin storage rather than in memory.
  */
-import type { OrcaPluginApi } from './lib/orca-api.mjs';
-import { type PresenceSummary, type PrivacyLevel } from './lib/presence-model.mjs';
+import { type DiscordActivity } from './lib/discord-ipc.mjs';
+import type { JsonValue, OrcaPluginApi } from './lib/orca-api.mjs';
+import { type PresenceAssets, type PresenceButton, type PresenceSummary, type PrivacyLevel, type StatusLine } from './lib/presence-model.mjs';
 /**
  * Discord application backing the presence by default.
  *
@@ -35,6 +36,39 @@ export declare const DEFAULT_IDLE_CLEAR_MINUTES = 15;
  */
 export declare const DEFAULT_ROTATE_SECONDS = 45;
 export declare const MIN_ROTATE_SECONDS = 20;
+/**
+ * `header` and the asset keys are `undefined` when unset so the model can tell
+ * "not configured" (take the default) from `""` (deliberately turned off).
+ */
+type PluginSettings = {
+    enabled: boolean;
+    privacy: PrivacyLevel;
+    clientId: string;
+    header: string | undefined;
+    assets: PresenceAssets;
+    /** `undefined` takes the default button; `[]` publishes none. */
+    buttons: PresenceButton[] | undefined;
+    statusLine: StatusLine | undefined;
+    /** Minutes an idle fleet stays on the card; 0 keeps it forever. */
+    idleClearMinutes: number;
+    /** Rotate a tagline through the details line. */
+    taglines: boolean;
+    /** The user's own lines; `undefined` uses the built-in set. */
+    customTaglines: string[] | undefined;
+    /** Rotate today's and all-time stats through the state line. */
+    showStats: boolean;
+    rotateSeconds: number;
+};
+export type SettingsSnapshot = {
+    settings: Record<string, JsonValue>;
+    /** The card as it would publish right now; `null` when nothing would show. */
+    preview: DiscordActivity | null;
+    defaultTaglines: readonly string[];
+    stats: string[];
+    connected: boolean;
+    idleCleared: boolean;
+    lastError: string | null;
+};
 export type PresenceStatusReport = {
     enabled: boolean;
     privacy: PrivacyLevel;
@@ -59,3 +93,12 @@ export type PresenceStatusReport = {
 };
 export default function activate(orca: OrcaPluginApi): void;
 export declare function deactivate(): Promise<void>;
+/** Every key the settings file and the settings page may carry. */
+export declare const SETTINGS_KEYS: readonly ['enabled', 'privacy', 'clientId', 'header', 'largeImage', 'largeText', 'smallImage', 'smallText', 'buttons', 'statusLine', 'idleClearMinutes', 'taglines', 'customTaglines', 'showStats', 'rotateSeconds'];
+/**
+ * The one validator for settings, whether they came from the settings file or
+ * the settings page. Anything malformed falls back to its default rather than
+ * reaching Discord.
+ */
+export declare function parseSettings(stored: Record<string, JsonValue>): PluginSettings;
+export {};

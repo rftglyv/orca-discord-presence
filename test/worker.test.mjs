@@ -102,6 +102,7 @@ test('activate registers the manifest commands and event handlers', async () => 
     'presence.header',
     'presence.privacy',
     'presence.reconnect',
+    'presence.settings',
     'presence.status',
     'presence.toggle'
   ])

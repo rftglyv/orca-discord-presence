@@ -10,8 +10,10 @@
  * survives the gap in plugin storage rather than in memory.
  */
 
+import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { DiscordPresenceClient } from './lib/discord-ipc.mjs'
+import { fileURLToPath } from 'node:url'
+import { DiscordPresenceClient, type DiscordActivity } from './lib/discord-ipc.mjs'
 import {
   createStats,
   deserializeStats,
@@ -19,6 +21,11 @@ import {
   recordPaneChange,
   type FleetStats
 } from './lib/stats.mjs'
+import {
+  createSettingsToken,
+  startSettingsServer,
+  type SettingsServer
+} from './lib/settings-server.mjs'
 import { DEFAULT_TAGLINES, pickTagline, sanitizeTaglines, shuffledOrder } from './lib/taglines.mjs'
 import type {
   JsonValue,
@@ -62,6 +69,8 @@ import {
 const STORAGE_KEY = 'presence-state'
 const STORAGE_STARTED_AT_KEY = 'busy-since'
 const STORAGE_STATS_KEY = 'fleet-stats'
+/** Kept in plugin storage so a bookmarked settings link survives worker restarts. */
+const STORAGE_SETTINGS_TOKEN_KEY = 'settings-token'
 
 /**
  * Discord application backing the presence by default.
@@ -119,6 +128,17 @@ type PluginSettings = {
   rotateSeconds: number
 }
 
+export type SettingsSnapshot = {
+  settings: Record<string, JsonValue>
+  /** The card as it would publish right now; `null` when nothing would show. */
+  preview: DiscordActivity | null
+  defaultTaglines: readonly string[]
+  stats: string[]
+  connected: boolean
+  idleCleared: boolean
+  lastError: string | null
+}
+
 export type PresenceStatusReport = {
   enabled: boolean
   privacy: PrivacyLevel
@@ -160,6 +180,7 @@ export default function activate(orca: OrcaPluginApi): void {
   // as the header command, for the same reason.
   orca.commands.register('presence.privacy', (args) => runtime.setPrivacy(args))
   orca.commands.register('presence.status', () => runtime.reportStatus())
+  orca.commands.register('presence.settings', () => runtime.openSettings())
   orca.commands.register('presence.reconnect', () => runtime.reconnectNow())
   // Takes the new header as its argument when the host passes one, and cycles
   // the presets when it does not — Orca has no text-input affordance for
@@ -210,6 +231,8 @@ class PresenceRuntime {
     rotateSeconds: DEFAULT_ROTATE_SECONDS
   }
   #client: DiscordPresenceClient | null = null
+  /** Settings exactly as stored, so a partial update can be re-parsed whole. */
+  #rawSettings: Record<string, JsonValue> = {}
   /**
    * The in-flight connect, shared so a publish that arrives mid-handshake waits
    * for it instead of being dropped until some later event happens along.
@@ -231,6 +254,7 @@ class PresenceRuntime {
   #rotationTick = 0
   #taglineOrder: number[] = []
   #rotationTimer: NodeJS.Timeout | null = null
+  #settingsServer: Promise<SettingsServer> | null = null
   #lastPublishAt = 0
   #lastPayload = ''
   #focus: WorkspaceContext = null
@@ -279,27 +303,8 @@ class PresenceRuntime {
     }
     try {
       const result = await this.#orca.host.call('settings.get')
-      const stored = result.settings ?? {}
-      this.#settings = {
-        enabled: stored['enabled'] !== false,
-        privacy: isPrivacyLevel(stored['privacy']) ? stored['privacy'] : DEFAULT_PRIVACY,
-        clientId: readClientId(stored['clientId']),
-        header: readOptionalString(stored['header']),
-        assets: {
-          largeImage: readOptionalString(stored['largeImage']),
-          largeText: readOptionalString(stored['largeText']),
-          smallImage: readOptionalString(stored['smallImage']),
-          smallText: readOptionalString(stored['smallText'])
-        },
-        // `false` is accepted as "no buttons" — friendlier to hand-edit than `[]`.
-        buttons: stored['buttons'] === false ? [] : sanitizeButtons(stored['buttons']),
-        statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined,
-        idleClearMinutes: readIdleClearMinutes(stored['idleClearMinutes']),
-        taglines: stored['taglines'] !== false,
-        customTaglines: sanitizeTaglines(stored['customTaglines']),
-        showStats: stored['showStats'] !== false,
-        rotateSeconds: readRotateSeconds(stored['rotateSeconds'])
-      }
+      this.#rawSettings = { ...(result.settings ?? {}) }
+      this.#settings = parseSettings(this.#rawSettings)
     } catch (error) {
       this.#orca.log(`settings unavailable, using defaults: ${describeError(error)}`)
     }
@@ -311,6 +316,7 @@ class PresenceRuntime {
     }
     try {
       await this.#orca.host.call('settings.set', { key, value })
+      this.#rawSettings[key] = value
     } catch (error) {
       this.#orca.log(`could not persist ${key}: ${describeError(error)}`)
     }
@@ -634,6 +640,108 @@ class PresenceRuntime {
     }
   }
 
+  /**
+   * Applies a partial settings update from the settings page. Only known keys
+   * are taken; `null` resets a key to its default. Everything is re-parsed
+   * through `parseSettings`, so the page cannot store what the file could not.
+   */
+  async updateSettings(patch: unknown): Promise<SettingsSnapshot> {
+    const record = typeof patch === 'object' && patch !== null ? (patch as Record<string, unknown>) : {}
+    const previousClientId = this.#settings.clientId
+    for (const key of SETTINGS_KEYS) {
+      if (key in record) {
+        const value = (record[key] ?? null) as JsonValue
+        this.#rawSettings[key] = value
+        await this.#saveSetting(key, value)
+      }
+    }
+    this.#settings = parseSettings(this.#rawSettings)
+    if (this.#settings.clientId !== previousClientId) {
+      this.#client?.close()
+      this.#client = null
+    }
+    this.#taglineOrder = []
+    this.#restartRotation()
+    this.#lastPayload = ''
+    if (this.#settings.enabled && this.#settings.privacy !== 'off') {
+      this.#schedulePublish()
+    } else {
+      await this.#clearPresence()
+    }
+    return this.settingsSnapshot()
+  }
+
+  /**
+   * Starts the settings page (once per worker) and opens it in the browser.
+   * The link is also shown as a notification and returned, for hosts or
+   * platforms where launching a browser from the worker does not work.
+   */
+  async openSettings(): Promise<{ url: string | null; error?: string }> {
+    try {
+      this.#settingsServer ??= this.#startSettingsServer().catch((error: unknown) => {
+        this.#settingsServer = null
+        throw error
+      })
+      const { url } = await this.#settingsServer
+      openInBrowser(url, (line) => this.#orca.log(line))
+      await this.#notify('Discord Presence', `Settings opened in your browser: ${url}`)
+      return { url }
+    } catch (error) {
+      const message = describeError(error)
+      this.#orca.log(`settings page unavailable: ${message}`)
+      await this.#notify('Discord Presence', `Could not open settings: ${message}`)
+      return { url: null, error: message }
+    }
+  }
+
+  async #startSettingsServer(): Promise<SettingsServer> {
+    let token: string | null = null
+    if (this.#can('storage')) {
+      const stored = await this.#orca.host.call('storage.get', { key: STORAGE_SETTINGS_TOKEN_KEY })
+      token = typeof stored.value === 'string' && /^[0-9a-f]{48}$/.test(stored.value) ? stored.value : null
+    }
+    if (!token) {
+      token = createSettingsToken()
+      if (this.#can('storage')) {
+        await this.#orca.host.call('storage.set', { key: STORAGE_SETTINGS_TOKEN_KEY, value: token })
+      }
+    }
+    return startSettingsServer({
+      token,
+      artDir: fileURLToPath(new URL('../assets/discord', import.meta.url)),
+      handlers: {
+        snapshot: () => this.settingsSnapshot(),
+        update: (patch) => this.updateSettings(patch)
+      }
+    })
+  }
+
+  /** What the settings page renders: stored values, the live card, and connection state. */
+  settingsSnapshot(): SettingsSnapshot {
+    const now = Date.now()
+    return {
+      settings: { ...this.#rawSettings },
+      preview: buildActivity({
+        ...this.#rotationFrame(now),
+        now,
+        state: this.#state,
+        focus: this.#focus,
+        privacy: this.#settings.privacy,
+        startedAt: this.#busySince,
+        header: this.#settings.header,
+        assets: this.#settings.assets,
+        partyId: this.#partyId,
+        buttons: this.#settings.buttons,
+        statusLine: this.#settings.statusLine
+      }),
+      defaultTaglines: DEFAULT_TAGLINES,
+      stats: describeStats(this.#stats, now),
+      connected: Boolean(this.#client?.connected),
+      idleCleared: this.#idleCleared,
+      lastError: this.#lastError
+    }
+  }
+
   async toggleEnabled(): Promise<{ enabled: boolean }> {
     this.#settings.enabled = !this.#settings.enabled
     await this.#saveSetting('enabled', this.#settings.enabled)
@@ -825,6 +933,8 @@ class PresenceRuntime {
       clearInterval(this.#rotationTimer)
       this.#rotationTimer = null
     }
+    void this.#settingsServer?.then((server) => server.close()).catch(() => {})
+    this.#settingsServer = null
     this.#publishTimer = null
     this.#reconnectTimer = null
     this.#focusTimer = null
@@ -843,6 +953,73 @@ function sameFocus(left: WorkspaceContext, right: WorkspaceContext): boolean {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Opens a URL in the user's default browser. Fire-and-forget: a missing
+ * opener (a headless Linux box) must cost a log line, not the worker.
+ */
+function openInBrowser(url: string, log: (line: string) => void): void {
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '""', url.replace(/&/g, '^&')]]
+        : ['xdg-open', [url]]
+  try {
+    const child = spawn(command, args as string[], { detached: true, stdio: 'ignore' })
+    child.on('error', (error) => log(`could not open a browser: ${error.message}`))
+    child.unref()
+  } catch (error) {
+    log(`could not open a browser: ${describeError(error)}`)
+  }
+}
+
+/** Every key the settings file and the settings page may carry. */
+export const SETTINGS_KEYS = [
+  'enabled',
+  'privacy',
+  'clientId',
+  'header',
+  'largeImage',
+  'largeText',
+  'smallImage',
+  'smallText',
+  'buttons',
+  'statusLine',
+  'idleClearMinutes',
+  'taglines',
+  'customTaglines',
+  'showStats',
+  'rotateSeconds'
+] as const
+
+/**
+ * The one validator for settings, whether they came from the settings file or
+ * the settings page. Anything malformed falls back to its default rather than
+ * reaching Discord.
+ */
+export function parseSettings(stored: Record<string, JsonValue>): PluginSettings {
+  return {
+    enabled: stored['enabled'] !== false,
+    privacy: isPrivacyLevel(stored['privacy']) ? stored['privacy'] : DEFAULT_PRIVACY,
+    clientId: readClientId(stored['clientId']),
+    header: readOptionalString(stored['header']),
+    assets: {
+      largeImage: readOptionalString(stored['largeImage']),
+      largeText: readOptionalString(stored['largeText']),
+      smallImage: readOptionalString(stored['smallImage']),
+      smallText: readOptionalString(stored['smallText'])
+    },
+    // `false` is accepted as "no buttons" — friendlier to hand-edit than `[]`.
+    buttons: stored['buttons'] === false ? [] : sanitizeButtons(stored['buttons']),
+    statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined,
+    idleClearMinutes: readIdleClearMinutes(stored['idleClearMinutes']),
+    taglines: stored['taglines'] !== false,
+    customTaglines: sanitizeTaglines(stored['customTaglines']),
+    showStats: stored['showStats'] !== false,
+    rotateSeconds: readRotateSeconds(stored['rotateSeconds'])
+  }
 }
 
 /** Seconds between rotations, never faster than Discord's rate limit allows. */

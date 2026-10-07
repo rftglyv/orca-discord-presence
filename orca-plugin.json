@@ -12,6 +12,11 @@
   "main": "dist/main.mjs",
   "contributes": {
     "commands": [
+      {
+        "id": "presence.settings",
+        "title": "Discord Presence: Open Settings",
+        "context": "global"
+      },
       { "id": "presence.toggle", "title": "Discord Presence: Toggle", "context": "global" },
       {
         "id": "presence.privacy",
