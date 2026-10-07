@@ -28,6 +28,13 @@ export declare const DEFAULT_CLIENT_ID = "1557157916279185418";
  * "Fleet idle" card would sit on the profile all night.
  */
 export declare const DEFAULT_IDLE_CLEAR_MINUTES = 15;
+/**
+ * How often the card rotates its tagline and stats. Discord throttles
+ * SET_ACTIVITY at roughly 5 calls per 20s; one change every 20s at the
+ * fastest leaves room for real status changes in between.
+ */
+export declare const DEFAULT_ROTATE_SECONDS = 45;
+export declare const MIN_ROTATE_SECONDS = 20;
 export type PresenceStatusReport = {
     enabled: boolean;
     privacy: PrivacyLevel;

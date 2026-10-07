@@ -64,6 +64,8 @@ export type PaneRecord = {
      * itself is not busy (a subagent can keep the pane working after it is done).
      */
     startedAt?: number;
+    /** How the main agent's last turn ended (`interruption`, …); only while done. */
+    outcome?: string;
 };
 export type PresenceState = {
     worktrees: Map<string, WorktreeRecord>;
@@ -88,6 +90,10 @@ export declare function createPresenceState(): PresenceState;
  * a timer reading "-3:00" or "40:00:00" is worse than one that starts late.
  */
 export declare function busyStartedAt(state: PresenceState, now: number): number | undefined;
+/** When the longest-waiting agent started waiting on the user, if any carries a stamp. */
+export declare function attentionStartedAt(state: PresenceState, now: number): number | undefined;
+/** The outcome of the most recently reported finished run. */
+export declare function lastOutcome(state: PresenceState): string | undefined;
 export declare function applyWorktreeCreated(state: PresenceState, payload: unknown): PresenceState;
 export declare function applyWorktreeRemoved(state: PresenceState, payload: unknown): PresenceState;
 export declare function applyAgentStatus(state: PresenceState, payload: unknown): PresenceState;
@@ -119,7 +125,13 @@ export declare function describeWorkspaces(state: PresenceState, summary?: Prese
  * at `full` privacy — at `minimal` the trailing segment stays a bare count, so
  * the shape of the fleet still shows without leaking what it is working on.
  */
-export declare function describeActivity(summary: PresenceSummary, workspaces?: readonly string[]): string;
+export type ActivityDetail = {
+    /** How long the longest-waiting agent has been waiting on the user. */
+    waitingMs?: number | undefined;
+    /** How the most recently finished run ended, from `mainAgent.outcome`. */
+    lastOutcome?: string | undefined;
+};
+export declare function describeActivity(summary: PresenceSummary, workspaces?: readonly string[], detail?: ActivityDetail): string;
 /**
  * Project label from whatever the host gave us. `workspace.readContext` returns
  * a display name for the focused worktree; a worktree seen only through
@@ -196,6 +208,15 @@ export type BuildActivityInput = {
     buttons?: readonly PresenceButton[] | undefined;
     /** `undefined` takes `DEFAULT_STATUS_LINE`. */
     statusLine?: StatusLine | undefined;
+    /** Wall clock for durations on the card; defaults to `Date.now()`. */
+    now?: number | undefined;
+    /**
+     * A tagline for the details line. When set, the header (and at `full`, the
+     * workspace and branch) moves to the logo's hover text instead of being lost.
+     */
+    tagline?: string | undefined;
+    /** Replaces the fleet line for this frame — how the stats rotation shows. */
+    stateLine?: string | undefined;
 };
 /**
  * Builds the payload handed to SET_ACTIVITY. Returns `null` when nothing should
@@ -210,7 +231,7 @@ export type BuildActivityInput = {
  * went from idle to busy, not process start, so the timer reads as "how long
  * this batch of work has been running".
  */
-export declare function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine }: BuildActivityInput): DiscordActivity | null;
+export declare function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine, now, tagline, stateLine }: BuildActivityInput): DiscordActivity | null;
 export declare function isPrivacyLevel(value: unknown): value is PrivacyLevel;
 export declare function nextPrivacy(current: PrivacyLevel): PrivacyLevel;
 /**

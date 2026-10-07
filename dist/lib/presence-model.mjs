@@ -12,6 +12,7 @@
  * to reason about than two.
  */
 import { basename } from 'node:path';
+import { formatDuration } from './stats.mjs';
 /** Orca's agent states, from `AGENT_STATUS_STATES` in the host. */
 export const AGENT_STATES = ['working', 'blocked', 'waiting', 'done'];
 export const PRIVACY_LEVELS = ['full', 'minimal', 'off'];
@@ -111,6 +112,31 @@ export function busyStartedAt(state, now) {
     }
     return earliest === undefined ? undefined : Math.min(earliest, now);
 }
+const ATTENTION_STATES = new Set(['blocked', 'waiting']);
+/** When the longest-waiting agent started waiting on the user, if any carries a stamp. */
+export function attentionStartedAt(state, now) {
+    let earliest;
+    for (const pane of state.panes.values()) {
+        const startedAt = pane.startedAt;
+        if (ATTENTION_STATES.has(pane.state) &&
+            startedAt !== undefined &&
+            startedAt <= now + CLOCK_SKEW_TOLERANCE_MS &&
+            now - startedAt <= STALE_STATUS_MS) {
+            earliest = earliest === undefined ? startedAt : Math.min(earliest, startedAt);
+        }
+    }
+    return earliest === undefined ? undefined : Math.min(earliest, now);
+}
+/** The outcome of the most recently reported finished run. */
+export function lastOutcome(state) {
+    let latest;
+    for (const pane of state.panes.values()) {
+        if (pane.state === 'done' && (latest === undefined || pane.receivedAt > latest.receivedAt)) {
+            latest = pane;
+        }
+    }
+    return latest?.outcome;
+}
 export function applyWorktreeCreated(state, payload) {
     const record = asRecord(payload);
     const worktreeId = asString(record?.['worktreeId']);
@@ -161,6 +187,10 @@ export function applyAgentStatus(state, payload) {
         stateStartedAt > 0) {
         pane.startedAt = stateStartedAt;
     }
+    const outcome = mainAgent?.['outcome'];
+    if (agentState === 'done' && typeof outcome === 'string' && outcome.length > 0) {
+        pane.outcome = outcome;
+    }
     state.panes.set(paneKey, pane);
     return state;
 }
@@ -204,6 +234,9 @@ export function deserializeState(raw) {
             };
             if (typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0) {
                 pane.startedAt = startedAt;
+            }
+            if (typeof record['outcome'] === 'string') {
+                pane.outcome = record['outcome'];
             }
             state.panes.set(paneKey, pane);
         }
@@ -268,31 +301,32 @@ function listNames(names) {
     const shown = names.slice(0, MAX_WORKSPACE_NAMES).join(', ');
     return `${shown} +${names.length - MAX_WORKSPACE_NAMES}`;
 }
-/**
- * The status line. Ordered by what a reader would want to know first: agents
- * that need a human come before agents that do not.
- *
- * `blocked` and `waiting` are separate segments even though Orca renders both
- * as its `permission` status — the distinction is free here and tells a reader
- * whether the fleet is stuck or merely asking.
- *
- * `workspaces` names the worktrees the working agents sit in. It is passed only
- * at `full` privacy — at `minimal` the trailing segment stays a bare count, so
- * the shape of the fleet still shows without leaking what it is working on.
- */
-export function describeActivity(summary, workspaces = []) {
+/** Outcomes worth a word on an idle card; anything else reads as a normal finish. */
+const OUTCOME_TEXT = {
+    interruption: 'last run interrupted'
+};
+export function describeActivity(summary, workspaces = [], detail = {}) {
     const parts = [];
     if (summary.working > 0) {
         parts.push(`${plural(summary.working, 'agent')} working`);
     }
+    // The wait is on the first attention segment only: one "for 4m" says how
+    // long the user has kept the fleet waiting without repeating itself.
+    const waited = detail.waitingMs !== undefined && detail.waitingMs >= 60_000
+        ? ` for ${formatDuration(detail.waitingMs)}`
+        : '';
     if (summary.blocked > 0) {
-        parts.push(`${summary.blocked} blocked`);
+        parts.push(`${summary.blocked} blocked${waited}`);
     }
     if (summary.waiting > 0) {
-        parts.push(`${summary.waiting} waiting`);
+        parts.push(`${summary.waiting} waiting${summary.blocked > 0 ? '' : waited}`);
     }
     if (parts.length === 0) {
-        return summary.panes > 0 ? 'Fleet idle' : 'No agents running';
+        if (summary.panes === 0) {
+            return 'No agents running';
+        }
+        const outcome = detail.lastOutcome ? OUTCOME_TEXT[detail.lastOutcome] : undefined;
+        return outcome ? `Fleet idle · ${outcome}` : 'Fleet idle';
     }
     if (summary.working > 0) {
         if (workspaces.length > 0) {
@@ -444,7 +478,7 @@ export function isStatusLine(value) {
  * went from idle to busy, not process start, so the timer reads as "how long
  * this batch of work has been running".
  */
-export function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine }) {
+export function buildActivity({ state, focus, privacy, startedAt, header, assets, partyId, buttons, statusLine, now = Date.now(), tagline, stateLine }) {
     if (privacy === 'off') {
         return null;
     }
@@ -454,24 +488,34 @@ export function buildActivity({ state, focus, privacy, startedAt, header, assets
         status_display_type: STATUS_LINES.indexOf(statusLine ?? DEFAULT_STATUS_LINE)
     };
     const heading = renderHeader(header ?? DEFAULT_HEADER, { focus, state, privacy });
+    let context;
     if (privacy === 'full') {
         const project = describeProject(focus, state);
         const branch = focus?.branch.trim() ?? '';
         // Deduped, so a header that already names the workspace does not repeat it.
         const details = dedupeSegments([heading, project, branch]).join(SEGMENT_SEPARATOR);
-        activity.details = clampField(details) ?? clampField(FALLBACK_DETAILS);
+        context = clampField(details) ?? clampField(FALLBACK_DETAILS);
     }
     else {
         // `minimal`: the fleet's shape is not sensitive, its names are — so the
         // header is all that survives, and a blanked header leaves details unset.
-        activity.details = heading ? clampField(heading) : undefined;
+        context = heading ? clampField(heading) : undefined;
     }
-    activity.state = clampField(describeActivity(summary, privacy === 'full' ? describeWorkspaces(state, summary) : []));
+    const taglineText = tagline ? clampField(tagline) : undefined;
+    activity.details = taglineText ?? context;
+    const attentionSince = attentionStartedAt(state, now);
+    activity.state = clampField(stateLine ??
+        describeActivity(summary, privacy === 'full' ? describeWorkspaces(state, summary) : [], {
+            waitingMs: attentionSince === undefined ? undefined : now - attentionSince,
+            lastOutcome: lastOutcome(state)
+        }));
     if (typeof startedAt === 'number' && startedAt > 0) {
         activity.timestamps = { start: Math.floor(startedAt) };
     }
     const largeImage = assets?.largeImage ?? DEFAULT_LARGE_IMAGE;
-    const largeText = assets?.largeText ?? DEFAULT_LARGE_TEXT;
+    // With a tagline on the details line, the header context moves into the
+    // logo's hover text rather than disappearing from the card.
+    const largeText = assets?.largeText ?? (taglineText && context ? context : DEFAULT_LARGE_TEXT);
     if (largeImage) {
         activity.assets = { large_image: largeImage };
         if (largeText) {

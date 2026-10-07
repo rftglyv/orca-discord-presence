@@ -12,6 +12,14 @@
 
 import { randomUUID } from 'node:crypto'
 import { DiscordPresenceClient } from './lib/discord-ipc.mjs'
+import {
+  createStats,
+  deserializeStats,
+  describeStats,
+  recordPaneChange,
+  type FleetStats
+} from './lib/stats.mjs'
+import { DEFAULT_TAGLINES, pickTagline, sanitizeTaglines, shuffledOrder } from './lib/taglines.mjs'
 import type {
   JsonValue,
   OrcaPluginApi,
@@ -53,6 +61,7 @@ import {
 
 const STORAGE_KEY = 'presence-state'
 const STORAGE_STARTED_AT_KEY = 'busy-since'
+const STORAGE_STATS_KEY = 'fleet-stats'
 
 /**
  * Discord application backing the presence by default.
@@ -78,6 +87,13 @@ const RECONNECT_DELAYS_MS = [15_000, 30_000, 60_000] as const
  * "Fleet idle" card would sit on the profile all night.
  */
 export const DEFAULT_IDLE_CLEAR_MINUTES = 15
+/**
+ * How often the card rotates its tagline and stats. Discord throttles
+ * SET_ACTIVITY at roughly 5 calls per 20s; one change every 20s at the
+ * fastest leaves room for real status changes in between.
+ */
+export const DEFAULT_ROTATE_SECONDS = 45
+export const MIN_ROTATE_SECONDS = 20
 
 /**
  * `header` and the asset keys are `undefined` when unset so the model can tell
@@ -94,6 +110,13 @@ type PluginSettings = {
   statusLine: StatusLine | undefined
   /** Minutes an idle fleet stays on the card; 0 keeps it forever. */
   idleClearMinutes: number
+  /** Rotate a tagline through the details line. */
+  taglines: boolean
+  /** The user's own lines; `undefined` uses the built-in set. */
+  customTaglines: string[] | undefined
+  /** Rotate today's and all-time stats through the state line. */
+  showStats: boolean
+  rotateSeconds: number
 }
 
 export type PresenceStatusReport = {
@@ -180,7 +203,11 @@ class PresenceRuntime {
     },
     buttons: undefined,
     statusLine: undefined,
-    idleClearMinutes: DEFAULT_IDLE_CLEAR_MINUTES
+    idleClearMinutes: DEFAULT_IDLE_CLEAR_MINUTES,
+    taglines: true,
+    customTaglines: undefined,
+    showStats: true,
+    rotateSeconds: DEFAULT_ROTATE_SECONDS
   }
   #client: DiscordPresenceClient | null = null
   /**
@@ -199,6 +226,11 @@ class PresenceRuntime {
   #idleTimer: NodeJS.Timeout | null = null
   /** Set once the idle card has been cleared, so later publishes stay quiet. */
   #idleCleared = false
+  #stats: FleetStats = createStats(Date.now())
+  /** Advances once per rotation; picks the tagline and the state-line frame. */
+  #rotationTick = 0
+  #taglineOrder: number[] = []
+  #rotationTimer: NodeJS.Timeout | null = null
   #lastPublishAt = 0
   #lastPayload = ''
   #focus: WorkspaceContext = null
@@ -233,6 +265,7 @@ class PresenceRuntime {
     await this.#loadSettings()
     await this.#loadState()
     await this.#refreshFocus()
+    this.#restartRotation()
     this.#schedulePublish()
   }
 
@@ -261,7 +294,11 @@ class PresenceRuntime {
         // `false` is accepted as "no buttons" — friendlier to hand-edit than `[]`.
         buttons: stored['buttons'] === false ? [] : sanitizeButtons(stored['buttons']),
         statusLine: isStatusLine(stored['statusLine']) ? stored['statusLine'] : undefined,
-        idleClearMinutes: readIdleClearMinutes(stored['idleClearMinutes'])
+        idleClearMinutes: readIdleClearMinutes(stored['idleClearMinutes']),
+        taglines: stored['taglines'] !== false,
+        customTaglines: sanitizeTaglines(stored['customTaglines']),
+        showStats: stored['showStats'] !== false,
+        rotateSeconds: readRotateSeconds(stored['rotateSeconds'])
       }
     } catch (error) {
       this.#orca.log(`settings unavailable, using defaults: ${describeError(error)}`)
@@ -288,6 +325,8 @@ class PresenceRuntime {
       this.#state = pruneStale(deserializeState(stored.value), Date.now())
       const since = await this.#orca.host.call('storage.get', { key: STORAGE_STARTED_AT_KEY })
       this.#busySince = typeof since.value === 'number' ? since.value : 0
+      const stats = await this.#orca.host.call('storage.get', { key: STORAGE_STATS_KEY })
+      this.#stats = deserializeStats(stats.value, Date.now())
     } catch (error) {
       this.#orca.log(`could not restore state: ${describeError(error)}`)
     }
@@ -301,6 +340,10 @@ class PresenceRuntime {
       await this.#orca.host.call('storage.set', {
         key: STORAGE_KEY,
         value: serializeState(this.#state) as unknown as JsonValue
+      })
+      await this.#orca.host.call('storage.set', {
+        key: STORAGE_STATS_KEY,
+        value: this.#stats as unknown as JsonValue
       })
     } catch (error) {
       this.#orca.log(`could not persist state: ${describeError(error)}`)
@@ -340,10 +383,59 @@ class PresenceRuntime {
       this.#orca.log(`event ignored: ${describeError(error)}`)
       return
     }
-    pruneStale(this.#state, Date.now())
+    const now = Date.now()
+    pruneStale(this.#state, now)
+    this.#recordStats(now)
     this.#trackBusyWindow()
     void this.#persistState()
     this.#schedulePublish()
+  }
+
+  /** Opens and closes runs for every pane, including ones that just went away. */
+  #recordStats(now: number): void {
+    for (const [paneKey, pane] of this.#state.panes) {
+      recordPaneChange(this.#stats, paneKey, pane, now)
+    }
+    for (const paneKey of Object.keys(this.#stats.openRuns)) {
+      if (!this.#state.panes.has(paneKey)) {
+        recordPaneChange(this.#stats, paneKey, undefined, now)
+      }
+    }
+  }
+
+  /** (Re)arms the rotation; a settings change can alter the interval or turn it off. */
+  #restartRotation(): void {
+    if (this.#rotationTimer) {
+      clearInterval(this.#rotationTimer)
+      this.#rotationTimer = null
+    }
+    const lines = this.#taglineList()
+    if (this.#taglineOrder.length !== lines.length) {
+      this.#taglineOrder = shuffledOrder(lines.length)
+    }
+    if (this.#disposed || (!this.#settings.taglines && !this.#settings.showStats)) {
+      return
+    }
+    this.#rotationTimer = setInterval(() => {
+      this.#rotationTick += 1
+      this.#schedulePublish()
+    }, this.#settings.rotateSeconds * 1000)
+    this.#rotationTimer.unref?.()
+  }
+
+  #taglineList(): readonly string[] {
+    return this.#settings.customTaglines ?? DEFAULT_TAGLINES
+  }
+
+  /** The tagline and state-line override for the current rotation frame. */
+  #rotationFrame(now: number): { tagline: string | undefined; stateLine: string | undefined } {
+    const tagline = this.#settings.taglines
+      ? pickTagline(this.#taglineList(), this.#rotationTick, this.#taglineOrder)
+      : undefined
+    // Frame 0 is always the live fleet line; stats frames follow it.
+    const statsLines = this.#settings.showStats ? describeStats(this.#stats, now) : []
+    const frame = this.#rotationTick % (statsLines.length + 1)
+    return { tagline, stateLine: frame === 0 ? undefined : statsLines[frame - 1] }
   }
 
   /**
@@ -427,7 +519,10 @@ class PresenceRuntime {
     // Built after the connect, not before: a publish that waited out a
     // handshake must send the state as it is now, not as it was then.
     this.#scheduleIdleClear()
+    const now = Date.now()
     const activity = buildActivity({
+      ...this.#rotationFrame(now),
+      now,
       state: this.#state,
       focus: this.#focus,
       privacy: this.#settings.privacy,
@@ -726,6 +821,10 @@ class PresenceRuntime {
       clearInterval(this.#focusTimer)
     }
     this.#cancelIdleTimer()
+    if (this.#rotationTimer) {
+      clearInterval(this.#rotationTimer)
+      this.#rotationTimer = null
+    }
     this.#publishTimer = null
     this.#reconnectTimer = null
     this.#focusTimer = null
@@ -744,6 +843,13 @@ function sameFocus(left: WorkspaceContext, right: WorkspaceContext): boolean {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Seconds between rotations, never faster than Discord's rate limit allows. */
+function readRotateSeconds(configured: unknown): number {
+  return typeof configured === 'number' && Number.isFinite(configured)
+    ? Math.max(MIN_ROTATE_SECONDS, configured)
+    : DEFAULT_ROTATE_SECONDS
 }
 
 /** Whole minutes, 0 or more; anything else takes the default. */

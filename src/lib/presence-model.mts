@@ -16,6 +16,7 @@ import { basename } from 'node:path'
 // Type-only, so the model still pulls in no IPC code at runtime.
 import type { DiscordActivity } from './discord-ipc.mjs'
 import type { AgentStatusState, WorkspaceContext } from './orca-api.mjs'
+import { formatDuration } from './stats.mjs'
 
 /** Orca's agent states, from `AGENT_STATUS_STATES` in the host. */
 export const AGENT_STATES: readonly AgentStatusState[] = ['working', 'blocked', 'waiting', 'done']
@@ -101,6 +102,8 @@ export type PaneRecord = {
    * itself is not busy (a subagent can keep the pane working after it is done).
    */
   startedAt?: number
+  /** How the main agent's last turn ended (`interruption`, …); only while done. */
+  outcome?: string
 }
 
 export type PresenceState = {
@@ -168,6 +171,36 @@ export function busyStartedAt(state: PresenceState, now: number): number | undef
   return earliest === undefined ? undefined : Math.min(earliest, now)
 }
 
+const ATTENTION_STATES: ReadonlySet<AgentStatusState> = new Set(['blocked', 'waiting'])
+
+/** When the longest-waiting agent started waiting on the user, if any carries a stamp. */
+export function attentionStartedAt(state: PresenceState, now: number): number | undefined {
+  let earliest: number | undefined
+  for (const pane of state.panes.values()) {
+    const startedAt = pane.startedAt
+    if (
+      ATTENTION_STATES.has(pane.state) &&
+      startedAt !== undefined &&
+      startedAt <= now + CLOCK_SKEW_TOLERANCE_MS &&
+      now - startedAt <= STALE_STATUS_MS
+    ) {
+      earliest = earliest === undefined ? startedAt : Math.min(earliest, startedAt)
+    }
+  }
+  return earliest === undefined ? undefined : Math.min(earliest, now)
+}
+
+/** The outcome of the most recently reported finished run. */
+export function lastOutcome(state: PresenceState): string | undefined {
+  let latest: PaneRecord | undefined
+  for (const pane of state.panes.values()) {
+    if (pane.state === 'done' && (latest === undefined || pane.receivedAt > latest.receivedAt)) {
+      latest = pane
+    }
+  }
+  return latest?.outcome
+}
+
 export function applyWorktreeCreated(state: PresenceState, payload: unknown): PresenceState {
   const record = asRecord(payload)
   const worktreeId = asString(record?.['worktreeId'])
@@ -222,6 +255,10 @@ export function applyAgentStatus(state: PresenceState, payload: unknown): Presen
   ) {
     pane.startedAt = stateStartedAt
   }
+  const outcome = mainAgent?.['outcome']
+  if (agentState === 'done' && typeof outcome === 'string' && outcome.length > 0) {
+    pane.outcome = outcome
+  }
   state.panes.set(paneKey, pane)
   return state
 }
@@ -271,6 +308,9 @@ export function deserializeState(raw: unknown): PresenceState {
       }
       if (typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0) {
         pane.startedAt = startedAt
+      }
+      if (typeof record['outcome'] === 'string') {
+        pane.outcome = record['outcome']
       }
       state.panes.set(paneKey, pane)
     }
@@ -356,22 +396,45 @@ function listNames(names: readonly string[]): string {
  * at `full` privacy — at `minimal` the trailing segment stays a bare count, so
  * the shape of the fleet still shows without leaking what it is working on.
  */
+export type ActivityDetail = {
+  /** How long the longest-waiting agent has been waiting on the user. */
+  waitingMs?: number | undefined
+  /** How the most recently finished run ended, from `mainAgent.outcome`. */
+  lastOutcome?: string | undefined
+}
+
+/** Outcomes worth a word on an idle card; anything else reads as a normal finish. */
+const OUTCOME_TEXT: Record<string, string> = {
+  interruption: 'last run interrupted'
+}
+
 export function describeActivity(
   summary: PresenceSummary,
-  workspaces: readonly string[] = []
+  workspaces: readonly string[] = [],
+  detail: ActivityDetail = {}
 ): string {
   const parts: string[] = []
   if (summary.working > 0) {
     parts.push(`${plural(summary.working, 'agent')} working`)
   }
+  // The wait is on the first attention segment only: one "for 4m" says how
+  // long the user has kept the fleet waiting without repeating itself.
+  const waited =
+    detail.waitingMs !== undefined && detail.waitingMs >= 60_000
+      ? ` for ${formatDuration(detail.waitingMs)}`
+      : ''
   if (summary.blocked > 0) {
-    parts.push(`${summary.blocked} blocked`)
+    parts.push(`${summary.blocked} blocked${waited}`)
   }
   if (summary.waiting > 0) {
-    parts.push(`${summary.waiting} waiting`)
+    parts.push(`${summary.waiting} waiting${summary.blocked > 0 ? '' : waited}`)
   }
   if (parts.length === 0) {
-    return summary.panes > 0 ? 'Fleet idle' : 'No agents running'
+    if (summary.panes === 0) {
+      return 'No agents running'
+    }
+    const outcome = detail.lastOutcome ? OUTCOME_TEXT[detail.lastOutcome] : undefined
+    return outcome ? `Fleet idle · ${outcome}` : 'Fleet idle'
   }
   if (summary.working > 0) {
     if (workspaces.length > 0) {
@@ -566,6 +629,15 @@ export type BuildActivityInput = {
   buttons?: readonly PresenceButton[] | undefined
   /** `undefined` takes `DEFAULT_STATUS_LINE`. */
   statusLine?: StatusLine | undefined
+  /** Wall clock for durations on the card; defaults to `Date.now()`. */
+  now?: number | undefined
+  /**
+   * A tagline for the details line. When set, the header (and at `full`, the
+   * workspace and branch) moves to the logo's hover text instead of being lost.
+   */
+  tagline?: string | undefined
+  /** Replaces the fleet line for this frame — how the stats rotation shows. */
+  stateLine?: string | undefined
 }
 
 /**
@@ -590,7 +662,10 @@ export function buildActivity({
   assets,
   partyId,
   buttons,
-  statusLine
+  statusLine,
+  now = Date.now(),
+  tagline,
+  stateLine
 }: BuildActivityInput): DiscordActivity | null {
   if (privacy === 'off') {
     return null
@@ -602,26 +677,36 @@ export function buildActivity({
   }
   const heading = renderHeader(header ?? DEFAULT_HEADER, { focus, state, privacy })
 
+  let context: string | undefined
   if (privacy === 'full') {
     const project = describeProject(focus, state)
     const branch = focus?.branch.trim() ?? ''
     // Deduped, so a header that already names the workspace does not repeat it.
     const details = dedupeSegments([heading, project, branch]).join(SEGMENT_SEPARATOR)
-    activity.details = clampField(details) ?? clampField(FALLBACK_DETAILS)
+    context = clampField(details) ?? clampField(FALLBACK_DETAILS)
   } else {
     // `minimal`: the fleet's shape is not sensitive, its names are — so the
     // header is all that survives, and a blanked header leaves details unset.
-    activity.details = heading ? clampField(heading) : undefined
+    context = heading ? clampField(heading) : undefined
   }
+  const taglineText = tagline ? clampField(tagline) : undefined
+  activity.details = taglineText ?? context
 
+  const attentionSince = attentionStartedAt(state, now)
   activity.state = clampField(
-    describeActivity(summary, privacy === 'full' ? describeWorkspaces(state, summary) : [])
+    stateLine ??
+      describeActivity(summary, privacy === 'full' ? describeWorkspaces(state, summary) : [], {
+        waitingMs: attentionSince === undefined ? undefined : now - attentionSince,
+        lastOutcome: lastOutcome(state)
+      })
   )
   if (typeof startedAt === 'number' && startedAt > 0) {
     activity.timestamps = { start: Math.floor(startedAt) }
   }
   const largeImage = assets?.largeImage ?? DEFAULT_LARGE_IMAGE
-  const largeText = assets?.largeText ?? DEFAULT_LARGE_TEXT
+  // With a tagline on the details line, the header context moves into the
+  // logo's hover text rather than disappearing from the card.
+  const largeText = assets?.largeText ?? (taglineText && context ? context : DEFAULT_LARGE_TEXT)
   if (largeImage) {
     activity.assets = { large_image: largeImage }
     if (largeText) {
