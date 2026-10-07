@@ -171,6 +171,11 @@ class PresenceRuntime {
         await this.#loadState();
         await this.#refreshFocus();
         this.#restartRotation();
+        // Up front, not on first use: people bookmark the address or type it
+        // in, and it should answer whenever the plugin is running.
+        void this.#ensureSettingsServer()
+            .then(({ url }) => this.#orca.log(`settings page: ${url}`))
+            .catch((error) => this.#orca.log(`settings page unavailable: ${describeError(error)}`));
         this.#schedulePublish();
     }
     #can(capability) {
@@ -544,11 +549,7 @@ class PresenceRuntime {
      */
     async openSettings() {
         try {
-            this.#settingsServer ??= this.#startSettingsServer().catch((error) => {
-                this.#settingsServer = null;
-                throw error;
-            });
-            const { url } = await this.#settingsServer;
+            const { url } = await this.#ensureSettingsServer();
             openInBrowser(url, (line) => this.#orca.log(line));
             await this.#notify('Discord Presence', `Settings opened in your browser: ${url}`);
             return { url };
@@ -559,6 +560,17 @@ class PresenceRuntime {
             await this.#notify('Discord Presence', `Could not open settings: ${message}`);
             return { url: null, error: message };
         }
+    }
+    /** Starts the settings server once per worker; a failed start may be retried. */
+    #ensureSettingsServer() {
+        if (this.#disposed) {
+            return Promise.reject(new Error('plugin is shutting down'));
+        }
+        this.#settingsServer ??= this.#startSettingsServer().catch((error) => {
+            this.#settingsServer = null;
+            throw error;
+        });
+        return this.#settingsServer;
     }
     async #startSettingsServer() {
         let token = null;

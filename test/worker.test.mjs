@@ -466,3 +466,19 @@ test('the elapsed timer starts from the agent host stamp, and only moves earlier
   assert.equal(fake.storage.get('busy-since'), tenMinutesAgo)
   await deactivate()
 })
+
+test('the settings page answers as soon as the plugin starts, without the command', async () => {
+  const fake = createFakeOrca()
+  await activate(fake.orca)
+  let line
+  for (let i = 0; i < 40 && !line; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    line = fake.logs.find((entry) => entry.startsWith('settings page: '))
+  }
+  assert.ok(line, 'expected the settings page address in the log')
+  const port = new URL(line.slice('settings page: '.length)).port
+  const response = await fetch(`http://127.0.0.1:${port}/`)
+  assert.equal(response.status, 200)
+  assert.match(await response.text(), /Discord Presence settings/)
+  await deactivate()
+})
